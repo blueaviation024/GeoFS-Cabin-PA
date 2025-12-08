@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cabin PA addon for GeoFS
 // @namespace    https://geofs-cabin-pa.local
-// @version      1.5.0
+// @version      1.6.0
 // @description  Cabin announcements panel with speech synthesis, seatbelt chime, safety audio with delay, control lock, and boarding music
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -13,24 +13,32 @@
   const state = {
     seatbelt: false,
     voiceName: null,
+    voiceName2: null,
+    dualEnabled: false,
+    dualOrderPrimaryFirst: true,
+    useBestVoiceAuto: false,
     safetySrc: null,
     safetyAudio: null,
     safetyTimer: null,
     boardingSrc: null,
-    boardingAudio: null
+    boardingAudio: null,
+    airlineName: null,
+    flightNumber: null,
+    destination: null,
+    primaryLang: null // new: selected primary language code (e.g. "en", "es")
   };
 
   const messages = {
-    boarding: "Welcome aboard. We are preparing for departure. Please stow carry-on items, fasten your seat belts, and ensure electronic devices are in airplane mode. Cabin crew will be coming through the aisle to assist.",
+    boarding: "Welcome aboard {airline} flight {flight} to {dest}. We are preparing for departure. Please stow carry-on items, fasten your seat belts, and ensure electronic devices are in airplane mode. Cabin crew will be coming through the aisle to assist.",
     safety: "Please direct your attention to the cabin crew for the safety demonstration. Fasten your seat belt low and tight. In case of a loss of cabin pressure, oxygen masks will drop from the overhead panel. Place the mask over your nose and mouth and secure it before assisting others.",
     takeoff: "Cabin crew, please be seated for takeoff. Passengers, we will be departing shortly. Please make sure your seat backs and tray tables are in the upright position and window shades are open.",
     cruise: "We have reached our cruising altitude. The seat belt sign may be switched off, however we recommend keeping your seat belt fastened while seated. Cabin service will begin shortly.",
-    descent: "We are beginning our descent. Please return to your seats, fasten seat belts, and ensure all electronic devices are secured. Cabin crew will prepare the cabin for landing.",
+    descent: "We are beginning our descent into {dest}. Please return to your seats, fasten seat belts, and ensure all electronic devices are secured. Cabin crew will prepare the cabin for landing.",
     landing: "Cabin crew, prepare for landing. Passengers, please ensure seat belts are fastened, tray tables stowed, and window shades open as we make our final approach.",
-    taxiin: "Welcome to our destination. Please remain seated with your seat belt fastened until we have reached the gate and the seat belt sign has been switched off.",
+    taxiin: "We have just landed at our destination, {dest}. Please remain seated with your seat belt fastened until we have reached the gate and the seat belt sign has been switched off.On behalf of the crew of {airline} flight {flight}, thank you for flying with us today. We hope to see you again soon.",
     seatbeltOn: "The seat belt sign has been turned on. Please return to your seats and fasten seat belts. Thank you.",
     seatbeltOff: "The seat belt sign has been turned off. You may now move about the cabin, keeping your seat belt fastened while seated.",
-    safetyVideoIntro: "For your safety, please pay attention to the safety video."
+    safetyVideoIntro: "In compliance with aviation regulations, please pay attention to the safety video."
   };
 
   function init() {
@@ -41,6 +49,7 @@
     createPanel();
     initVoices();
     loadVoicePreference();
+    loadFlightInfo();
 
     document.addEventListener("keydown", handleKeydown, true);
     document.addEventListener("keyup", handleKeyup, true);
@@ -58,7 +67,7 @@
   function injectStyles() {
     const s = document.createElement("style");
     s.textContent =
-      "#cabin-pa-panel{position:fixed;top:16px;right:16px;width:340px;background:rgba(22,23,26,.92);color:#fff;border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(6px);z-index:999999;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}" +
+      "#cabin-pa-panel{position:fixed;top:16px;right:16px;width:420px;background:rgba(22,23,26,.92);color:#fff;border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(6px);z-index:999999;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}" +
       "#cabin-pa-panel .title{font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}" +
       "#cabin-pa-panel .row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}" +
       "#cabin-pa-panel button{flex:1;padding:8px 10px;border:none;border-radius:8px;background:#2b2f36;color:#fff;cursor:pointer;font-weight:500}" +
@@ -72,7 +81,14 @@
       "#cabin-pa-toggle:hover{filter:brightness(1.08)}" +
       "@media (max-height:700px){#cabin-pa-toggle{bottom:64px}}" +
       "@media (max-height:540px){#cabin-pa-toggle{bottom:48px}}" +
-      "#cabin-pa-overlay{position:fixed;inset:0;background:transparent;z-index:999998;display:none}";
+      "#cabin-pa-overlay{position:fixed;inset:0;background:transparent;z-index:999998;display:none}" +
+      "#cabin-pa-panel .meta-label{font-size:12px;opacity:.85;width:100%}" +
+      /* language picker modal */
+      "#cabin-pa-lang-picker{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:320px;max-height:60vh;overflow:auto;background:#121316;border-radius:10px;padding:10px;z-index:1000001;display:none;box-shadow:0 8px 24px rgba(0,0,0,.6)}" +
+      "#cabin-pa-lang-picker h3{margin:0 0 8px 0;font-size:14px}" +
+      "#cabin-pa-lang-picker ul{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:6px}" +
+      "#cabin-pa-lang-picker li{background:#1f2228;padding:8px;border-radius:6px;cursor:pointer;text-align:center}" +
+      "#cabin-pa-lang-picker li:hover{background:#2b2f36}";
     document.head.appendChild(s);
   }
 
@@ -115,6 +131,24 @@
     panel.innerHTML =
       '<div class="title"><span>Cabin PA</span><button class="close" id="cabin-pa-close">Hide</button></div>' +
       '<div class="row">' +
+      '<input type="text" id="cabin-pa-airline" placeholder="Airline name">' +
+      '<input type="text" id="cabin-pa-flight" placeholder="Flight number">' +
+      '<input type="text" id="cabin-pa-destination" placeholder="Destination">' +
+      "</div>" +
+      '<div class="row small"><span class="meta-label">These values are used in Boarding, Descent and Taxi‑in announcements.</span></div>' +
+      // language selector button (new)
+      '<div class="row">' +
+      '<button id="cabin-pa-lang-btn">Choose primary language</button>' +
+      '<div id="cabin-pa-lang-selected" style="align-self:center;padding:6px 8px;border-radius:6px;background:#1f2228;">None</div>' +
+      "</div>" +
+      // dual language controls
+      '<div class="row">' +
+      '<select id="cabin-pa-voice"></select>' +
+      '<select id="cabin-pa-voice-2"></select>' +
+      "</div>" +
+      '<div class="row small"><label><input type="checkbox" id="cabin-pa-dual"> Enable dual-language (speak both)</label><label style="margin-left:auto"><input type="checkbox" id="cabin-pa-dual-order"> Primary first</label></div>' +
+      '<div class="row small"><label><input type="checkbox" id="cabin-pa-auto-best"> Auto-select best available voice</label></div>' +
+      '<div class="row">' +
       btn("Boarding", "boarding") +
       btn("Safety", "safety") +
       btn("Takeoff", "takeoff") +
@@ -134,9 +168,6 @@
       '<button id="cabin-pa-say">Speak</button>' +
       "</div>" +
       '<div class="row">' +
-      '<select id="cabin-pa-voice"></select>' +
-      "</div>" +
-      '<div class="row">' +
       '<input type="file" id="cabin-pa-safety-file" accept="audio/*">' +
       btn("Play Safety Video", "playSafety", "accent") +
       "</div>" +
@@ -150,11 +181,53 @@
     document.body.appendChild(panel);
     panel.addEventListener("click", onPanelClick);
 
+    // language picker container (hidden by default)
+    const langPicker = document.createElement("div");
+    langPicker.id = "cabin-pa-lang-picker";
+    langPicker.innerHTML = '<h3>Select primary language</h3><ul id="cabin-pa-lang-list"></ul>';
+    document.body.appendChild(langPicker);
+
     const safetyFile = document.getElementById("cabin-pa-safety-file");
     safetyFile.addEventListener("change", onSafetyFileChange);
 
     const boardingFile = document.getElementById("cabin-pa-boarding-file");
     boardingFile.addEventListener("change", onBoardingFileChange);
+
+    // flight info inputs
+    const airlineInput = document.getElementById("cabin-pa-airline");
+    const flightInput = document.getElementById("cabin-pa-flight");
+    const destInput = document.getElementById("cabin-pa-destination");
+    airlineInput.addEventListener("input", onFlightInfoChange);
+    flightInput.addEventListener("input", onFlightInfoChange);
+    destInput.addEventListener("input", onFlightInfoChange);
+
+    // dual voice controls events & load stored settings
+    const v1 = document.getElementById("cabin-pa-voice");
+    const v2 = document.getElementById("cabin-pa-voice-2");
+    const dual = document.getElementById("cabin-pa-dual");
+    const dualOrder = document.getElementById("cabin-pa-dual-order");
+    const autoBest = document.getElementById("cabin-pa-auto-best");
+    dual.addEventListener("change", () => { state.dualEnabled = dual.checked; localStorage.setItem("cabinPaDual", state.dualEnabled ? "1" : "0"); });
+    dualOrder.addEventListener("change", () => { state.dualOrderPrimaryFirst = dualOrder.checked; localStorage.setItem("cabinPaDualOrder", state.dualOrderPrimaryFirst ? "1" : "0"); });
+    autoBest.addEventListener("change", () => { state.useBestVoiceAuto = autoBest.checked; localStorage.setItem("cabinPaAutoBest", state.useBestVoiceAuto ? "1" : "0"); });
+
+    v1.addEventListener("change", () => { state.voiceName = v1.value; localStorage.setItem("cabinPaVoice", state.voiceName); });
+    v2.addEventListener("change", () => { state.voiceName2 = v2.value; localStorage.setItem("cabinPaVoice2", state.voiceName2); });
+
+    // language button behavior
+    const langBtn = document.getElementById("cabin-pa-lang-btn");
+    const langSelected = document.getElementById("cabin-pa-lang-selected");
+    langBtn.addEventListener("click", showLanguagePicker);
+    // clicking outside picker hides it
+    document.addEventListener("click", (ev) => {
+      const picker = document.getElementById("cabin-pa-lang-picker");
+      if (!picker) return;
+      const target = ev.target;
+      if (picker.contains(target) || target === langBtn) return;
+      hideLanguagePicker();
+    }, true);
+
+    updateLanguageDisplay();
   }
 
   function btn(label, action, extra) {
@@ -375,8 +448,24 @@
     if (el) el.textContent = text;
   }
 
+  function populatePlaceholders(text) {
+    const a = state.airlineName || localStorage.getItem("cabinPaAirline") || "";
+    const f = state.flightNumber || localStorage.getItem("cabinPaFlight") || "";
+    const d = state.destination || localStorage.getItem("cabinPaDestination") || "";
+    return String(text)
+      .replace(/\{airline\}/g, a)
+      .replace(/\{flight\}/g, f)
+      .replace(/\{dest\}/g, d);
+  }
+
+  // Speak (fire-and-forget) — supports dual-language if enabled
   function speak(text) {
     if (!("speechSynthesis" in window)) return;
+    text = populatePlaceholders(text);
+    if (state.dualEnabled) {
+      speakDual(text);
+      return;
+    }
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     const v = resolveVoice();
@@ -387,10 +476,13 @@
     window.speechSynthesis.speak(u);
   }
 
+  // speakAsync returns a Promise that resolves after speech (or dual speech) finishes
   function speakAsync(text) {
     return new Promise((resolve) => {
-      if (!("speechSynthesis" in window)) {
-        setTimeout(resolve, 0);
+      if (!("speechSynthesis" in window)) { setTimeout(resolve, 0); return; }
+      text = populatePlaceholders(text);
+      if (state.dualEnabled) {
+        speakDualAsync(text).then(resolve);
         return;
       }
       try { window.speechSynthesis.cancel(); } catch (_) {}
@@ -406,30 +498,160 @@
     });
   }
 
+  // Dual-language helpers ------------------------------------------------
+
+  function speakDual(text) {
+    try { window.speechSynthesis.cancel(); } catch (_) {}
+    const voices = window.speechSynthesis.getVoices() || [];
+    if (state.useBestVoiceAuto) autoSelectBestVoices(voices);
+
+    // pick primary voice by explicit name or primaryLang or fallback
+    const primary = resolveVoiceByName(state.voiceName) || resolveVoiceForLang(state.primaryLang) || resolveVoice();
+    const secondary = resolveVoiceByName(state.voiceName2) || findAnyOtherVoice(primary);
+
+    const first = state.dualOrderPrimaryFirst ? primary : secondary;
+    const second = state.dualOrderPrimaryFirst ? secondary : primary;
+
+    if (!first && !second) return;
+
+    const speakUtter = (voice, txt, onend) => {
+      const u = new SpeechSynthesisUtterance(txt);
+      if (voice) u.voice = voice;
+      u.rate = 1;
+      u.pitch = 1;
+      u.volume = 1;
+      if (onend) u.onend = onend;
+      window.speechSynthesis.speak(u);
+    };
+
+    if (first && second) {
+      speakUtter(first, text, () => speakUtter(second, text));
+    } else {
+      const v = first || second;
+      speakUtter(v, text);
+    }
+  }
+
+  function speakDualAsync(text) {
+    return new Promise((resolve) => {
+      try { window.speechSynthesis.cancel(); } catch (_) {}
+      const voices = window.speechSynthesis.getVoices() || [];
+      if (state.useBestVoiceAuto) autoSelectBestVoices(voices);
+
+      const primary = resolveVoiceByName(state.voiceName) || resolveVoiceForLang(state.primaryLang) || resolveVoice();
+      const secondary = resolveVoiceByName(state.voiceName2) || findAnyOtherVoice(primary);
+
+      const first = state.dualOrderPrimaryFirst ? primary : secondary;
+      const second = state.dualOrderPrimaryFirst ? secondary : primary;
+
+      if (!first && !second) { resolve(); return; }
+
+      const speakUtter = (voice, txt) => {
+        return new Promise((res) => {
+          const u = new SpeechSynthesisUtterance(txt);
+          if (voice) u.voice = voice;
+          u.rate = 1;
+          u.pitch = 1;
+          u.volume = 1;
+          u.onend = () => res();
+          u.onerror = () => res();
+          window.speechSynthesis.speak(u);
+        });
+      };
+
+      if (first && second) {
+        speakUtter(first, text).then(() => speakUtter(second, text)).then(() => resolve());
+      } else {
+        const v = first || second;
+        speakUtter(v, text).then(() => resolve());
+      }
+    });
+  }
+
+  function resolveVoiceByName(name) {
+    if (!name) return null;
+    const voices = window.speechSynthesis.getVoices() || [];
+    return voices.find((x) => x.name === name) || null;
+  }
+
+  function resolveVoiceForLang(langCode) {
+    if (!langCode) return null;
+    const voices = window.speechSynthesis.getVoices() || [];
+    const lc = String(langCode || "").toLowerCase();
+    // prefer exact prefix match (e.g. "en" -> "en-US")
+    const match = voices.find(v => String(v.lang || "").toLowerCase().startsWith(lc));
+    if (match) return match;
+    // fallback: any voice that contains the code
+    return voices.find(v => String(v.lang || "").toLowerCase().includes(lc)) || null;
+  }
+
+  function findAnyOtherVoice(exclude) {
+    const voices = window.speechSynthesis.getVoices() || [];
+    if (!voices.length) return null;
+    if (!exclude) return voices[0];
+    return voices.find((v) => v.name !== (exclude.name || "")) || null;
+  }
+
+  // Try to auto-select "best" voices: prefer localService & different languages if possible
+  function autoSelectBestVoices(voices) {
+    if (!voices || !voices.length) return;
+    const primary = voices.find(v => v.localService && String(v.lang || "").toLowerCase().startsWith("en")) ||
+                    voices.find(v => String(v.lang || "").toLowerCase().startsWith("en")) ||
+                    voices[0];
+    const secondary = voices.find(v => v.lang !== (primary && primary.lang)) || voices.find(v => v.name !== (primary && primary.name));
+    if (primary) state.voiceName = primary.name;
+    if (secondary) state.voiceName2 = secondary.name;
+    localStorage.setItem("cabinPaVoice", state.voiceName || "");
+    localStorage.setItem("cabinPaVoice2", state.voiceName2 || "");
+  }
+
   function initVoices() {
     const fill = () => {
       const select = document.getElementById("cabin-pa-voice");
-      if (!select) return;
+      const select2 = document.getElementById("cabin-pa-voice-2");
+      if (!select || !select2) return;
       const voices = window.speechSynthesis.getVoices() || [];
       select.innerHTML = "";
+      select2.innerHTML = "";
       voices.forEach((v) => {
         const opt = document.createElement("option");
         opt.value = v.name;
-        opt.textContent = v.name + " (" + (v.lang || "unknown") + ")";
+        opt.textContent = v.name + " (" + (v.lang || "unknown") + (v.localService ? " local" : "") + ")";
         select.appendChild(opt);
+        const opt2 = opt.cloneNode(true);
+        select2.appendChild(opt2);
       });
       const saved = state.voiceName || localStorage.getItem("cabinPaVoice");
+      const saved2 = state.voiceName2 || localStorage.getItem("cabinPaVoice2");
       if (saved) {
         const match = Array.from(select.options).find((o) => o.value === saved);
         if (match) select.value = saved;
-      } else {
-        const en = Array.from(select.options).find((o) => String(o.textContent).includes("(en"));
-        if (en) select.value = en.value;
       }
+      if (saved2) {
+        const match2 = Array.from(select2.options).find((o) => o.value === saved2);
+        if (match2) select2.value = saved2;
+      }
+      const dual = document.getElementById("cabin-pa-dual");
+      const dualOrder = document.getElementById("cabin-pa-dual-order");
+      const autoBest = document.getElementById("cabin-pa-auto-best");
+      dual.checked = !!localStorage.getItem("cabinPaDual");
+      dualOrder.checked = localStorage.getItem("cabinPaDualOrder") !== "0";
+      autoBest.checked = localStorage.getItem("cabinPaAutoBest") === "1";
+      state.dualEnabled = dual.checked;
+      state.dualOrderPrimaryFirst = dualOrder.checked;
+      state.useBestVoiceAuto = autoBest.checked;
+
       select.addEventListener("change", () => {
         state.voiceName = select.value;
         localStorage.setItem("cabinPaVoice", state.voiceName);
       });
+      select2.addEventListener("change", () => {
+        state.voiceName2 = select2.value;
+        localStorage.setItem("cabinPaVoice2", state.voiceName2);
+      });
+
+      // populate language picker list now that voices are available
+      buildLanguageList();
     };
     fill();
     window.speechSynthesis.onvoiceschanged = fill;
@@ -437,6 +659,11 @@
 
   function resolveVoice() {
     const voices = window.speechSynthesis.getVoices() || [];
+    // if primaryLang set, prefer voice for that language
+    if (state.primaryLang) {
+      const byLang = resolveVoiceForLang(state.primaryLang);
+      if (byLang) return byLang;
+    }
     const name = state.voiceName || localStorage.getItem("cabinPaVoice");
     if (name) {
       const v = voices.find((x) => x.name === name);
@@ -449,7 +676,109 @@
   function loadVoicePreference() {
     const saved = localStorage.getItem("cabinPaVoice");
     if (saved) state.voiceName = saved;
+    const saved2 = localStorage.getItem("cabinPaVoice2");
+    if (saved2) state.voiceName2 = saved2;
+    state.dualEnabled = localStorage.getItem("cabinPaDual") === "1";
+    state.dualOrderPrimaryFirst = localStorage.getItem("cabinPaDualOrder") !== "0";
+    state.useBestVoiceAuto = localStorage.getItem("cabinPaAutoBest") === "1";
+    state.primaryLang = localStorage.getItem("cabinPaPrimaryLang") || null;
   }
+
+  function loadFlightInfo() {
+    const a = localStorage.getItem("cabinPaAirline") || "";
+    const f = localStorage.getItem("cabinPaFlight") || "";
+    const d = localStorage.getItem("cabinPaDestination") || "";
+    state.airlineName = a;
+    state.flightNumber = f;
+    state.destination = d;
+    const ai = document.getElementById("cabin-pa-airline");
+    const fi = document.getElementById("cabin-pa-flight");
+    const di = document.getElementById("cabin-pa-destination");
+    if (ai) ai.value = a;
+    if (fi) fi.value = f;
+    if (di) di.value = d;
+  }
+
+  function onFlightInfoChange() {
+    const ai = document.getElementById("cabin-pa-airline");
+    const fi = document.getElementById("cabin-pa-flight");
+    const di = document.getElementById("cabin-pa-destination");
+    state.airlineName = ai ? ai.value.trim() : "";
+    state.flightNumber = fi ? fi.value.trim() : "";
+    state.destination = di ? di.value.trim() : "";
+    localStorage.setItem("cabinPaAirline", state.airlineName || "");
+    localStorage.setItem("cabinPaFlight", state.flightNumber || "");
+    localStorage.setItem("cabinPaDestination", state.destination || "");
+  }
+
+  // language picker helpers -----------------------------------------------
+  function showLanguagePicker() {
+    const picker = document.getElementById("cabin-pa-lang-picker");
+    if (!picker) return;
+    picker.style.display = "block";
+    // ensure list built (voices may load later)
+    buildLanguageList();
+  }
+
+  function hideLanguagePicker() {
+    const picker = document.getElementById("cabin-pa-lang-picker");
+    if (!picker) return;
+    picker.style.display = "none";
+  }
+
+  function buildLanguageList() {
+    const listEl = document.getElementById("cabin-pa-lang-list");
+    if (!listEl) return;
+    const voices = window.speechSynthesis.getVoices() || [];
+    // collect unique language codes and prefer shorter codes (e.g. "en")
+    const map = {};
+    voices.forEach(v => {
+      const lc = String(v.lang || "unknown").split("-")[0].toLowerCase();
+      if (!map[lc]) map[lc] = { code: lc, sample: v.lang || "", voices: [v] };
+      else map[lc].voices.push(v);
+    });
+    const items = Object.values(map).sort((a,b) => a.code.localeCompare(b.code));
+    listEl.innerHTML = "";
+    items.forEach(it => {
+      const li = document.createElement("li");
+      li.textContent = it.code + (it.sample && it.sample !== it.code ? " (" + it.sample + ")" : "");
+      li.title = "Voices: " + it.voices.map(v => v.name).join(", ");
+      li.addEventListener("click", () => {
+        setPrimaryLanguage(it.code);
+        hideLanguagePicker();
+      });
+      listEl.appendChild(li);
+    });
+    if (!items.length) {
+      listEl.innerHTML = '<li style="grid-column:1/-1">No voices available</li>';
+    }
+  }
+
+  function setPrimaryLanguage(code) {
+    state.primaryLang = code || null;
+    if (state.primaryLang) localStorage.setItem("cabinPaPrimaryLang", state.primaryLang);
+    else localStorage.removeItem("cabinPaPrimaryLang");
+    // set voiceName to a voice matching that language if possible
+    const v = resolveVoiceForLang(state.primaryLang);
+    if (v) {
+      state.voiceName = v.name;
+      localStorage.setItem("cabinPaVoice", state.voiceName);
+      // update select UI if present
+      const sel = document.getElementById("cabin-pa-voice");
+      if (sel) {
+        const opt = Array.from(sel.options).find(o => o.value === v.name);
+        if (opt) sel.value = v.name;
+      }
+    }
+    updateLanguageDisplay();
+  }
+
+  function updateLanguageDisplay() {
+    const el = document.getElementById("cabin-pa-lang-selected");
+    if (!el) return;
+    el.textContent = state.primaryLang ? state.primaryLang : "None";
+  }
+  // -----------------------------------------------------------------------
 
   function ding() {
     try {
