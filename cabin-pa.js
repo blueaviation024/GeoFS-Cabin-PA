@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cabin PA addon for GeoFS
 // @namespace    https://geofs-cabin-pa.local
-// @version      1.6.0
+// @version      1.8.0
 // @description  Cabin announcements panel with speech synthesis, seatbelt chime, safety audio with delay, control lock, and boarding music
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -29,16 +29,17 @@
   };
 
   const messages = {
-    boarding: "Welcome aboard {airline} flight {flight} to {dest}. We are preparing for departure. Please stow carry-on items, fasten your seat belts, and ensure electronic devices are in airplane mode. Cabin crew will be coming through the aisle to assist.",
+    boarding: "Welcome aboard your {airline} flight {flight} bound for {dest}. We are glad to have you onboard with us. As we prepare for departure, please stow carry-on items, fasten your seat belts, and ensure electronic devices are in flight safe mode. If this is not your flight, please do not hesitate to ask a crew member for assistance. We wish you a pleasant flight.",
+    boardingDoorOpen: "The boarding door has been opened; passengers may now disembark.",
     safety: "Please direct your attention to the cabin crew for the safety demonstration. Fasten your seat belt low and tight. In case of a loss of cabin pressure, oxygen masks will drop from the overhead panel. Place the mask over your nose and mouth and secure it before assisting others.",
-    takeoff: "Cabin crew, please be seated for takeoff. Passengers, we will be departing shortly. Please make sure your seat backs and tray tables are in the upright position and window shades are open.",
-    cruise: "We have reached our cruising altitude. The seat belt sign may be switched off, however we recommend keeping your seat belt fastened while seated. Cabin service will begin shortly.",
-    descent: "We are beginning our descent into {dest}. Please return to your seats, fasten seat belts, and ensure all electronic devices are secured. Cabin crew will prepare the cabin for landing.",
-    landing: "Cabin crew, prepare for landing. Passengers, please ensure seat belts are fastened, tray tables stowed, and window shades open as we make our final approach.",
-    taxiin: "We have just landed at our destination, {dest}. Please remain seated with your seat belt fastened until we have reached the gate and the seat belt sign has been switched off.On behalf of the crew of {airline} flight {flight}, thank you for flying with us today. We hope to see you again soon.",
-    seatbeltOn: "The seat belt sign has been turned on. Please return to your seats and fasten seat belts. Thank you.",
+    takeoff: "Cabin crew, takeoff stations. We are about to take off. Please make sure your seat backs and tray tables are in the upright position and window shades are raised.",
+    cruise: "We have reached our cruising altitude. The seat belt sign may be switched off, however we recommend keeping your seat belt fastened while seated. Cabin crew will be serving meals in a few moments.",
+    descent: "We are beginning our descent into {dest}. Please return to your seats, fasten seat belts, and ensure all electronic devices are secured. Cabin crew will now perform a pre-descent cabin check.",
+    landing: "Cabin crew, prepare for arrival. We are beginning our final descent. Please ensure seat belts are fastened, tray tables stowed, and window shades raised as we make our final approach.",
+    taxiin: "We have just landed at {dest}. For your safety and comfort, please remain seated with your seat belt fastened until the captain turns off the seatbelt sign. Please check your surroundings to ensure if you never leave your personal belongings behind. Be cautious when opening the overhead bins as heavy items may have moved during the flight. On behalf of the Captain, First Officer and the cabin crew, we thank you for flying {airline}. We hope to see you again soon.",
+    seatbeltOn: "The seat belt sign has been turned on. Please return to your seats and fasten your seat belts. Thank you for your cooperation.",
     seatbeltOff: "The seat belt sign has been turned off. You may now move about the cabin, keeping your seat belt fastened while seated.",
-    safetyVideoIntro: "In compliance with aviation regulations, please pay attention to the safety video."
+    safetyVideoIntro: "At {airline}, your safety is our top priority. Please pay close attention to the following safety demonstration, which will cover important information about your flight and how to respond in an emergency. We appreciate your attention and cooperation in ensuring a safe and comfortable journey for everyone on board."
   };
 
   function init() {
@@ -47,21 +48,13 @@
     createOverlay();
     createToggleButton();
     createPanel();
-    initVoices();
     loadVoicePreference();
+    initVoices();
     loadFlightInfo();
 
     document.addEventListener("keydown", handleKeydown, true);
     document.addEventListener("keyup", handleKeyup, true);
     document.addEventListener("keypress", handleKeypress, true);
-    document.addEventListener("wheel", handlePointerBlock, { capture: true, passive: false });
-    document.addEventListener("mousedown", handlePointerBlock, true);
-    document.addEventListener("mouseup", handlePointerBlock, true);
-    document.addEventListener("mousemove", handlePointerBlock, true);
-    document.addEventListener("touchstart", handlePointerBlock, { capture: true, passive: false });
-    document.addEventListener("touchmove", handlePointerBlock, { capture: true, passive: false });
-    document.addEventListener("touchend", handlePointerBlock, true);
-    document.addEventListener("contextmenu", handlePointerBlock, true);
   }
 
   function injectStyles() {
@@ -95,6 +88,7 @@
   function createOverlay() {
     const overlay = document.createElement("div");
     overlay.id = "cabin-pa-overlay";
+    overlay.addEventListener("click", () => setPanelVisible(false));
     document.body.appendChild(overlay);
   }
 
@@ -150,6 +144,7 @@
       '<div class="row small"><label><input type="checkbox" id="cabin-pa-auto-best"> Auto-select best available voice</label></div>' +
       '<div class="row">' +
       btn("Boarding", "boarding") +
+      btn("Boarding Door Open", "boardingDoorOpen") +
       btn("Safety", "safety") +
       btn("Takeoff", "takeoff") +
       "</div>" +
@@ -344,9 +339,6 @@
       e.stopPropagation();
       return;
     }
-    e.stopImmediatePropagation();
-    e.stopPropagation();
-    e.preventDefault();
   }
 
   function handleKeyup(e) {
@@ -357,9 +349,6 @@
       e.stopPropagation();
       return;
     }
-    e.stopImmediatePropagation();
-    e.stopPropagation();
-    e.preventDefault();
   }
 
   function handleKeypress(e) {
@@ -370,11 +359,9 @@
       e.stopPropagation();
       return;
     }
-    e.stopImmediatePropagation();
-    e.stopPropagation();
-    e.preventDefault();
   }
 
+  // We no longer block all page pointer events globally. The overlay handles outside clicks while the panel is visible.
   function handlePointerBlock(e) {
     if (!isPanelVisible()) return;
     const panel = document.getElementById("cabin-pa-panel");
@@ -408,6 +395,16 @@
     audio.preload = "auto";
     audio.onended = () => setSafetyStatus("Safety audio finished");
     audio.onerror = () => setSafetyStatus("Failed to load safety audio");
+    audio.load();
+    // Attempt to unlock playback in browsers that require a prior user gesture.
+    audio.muted = true;
+    audio.play().then(() => {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+    }).catch(() => {
+      audio.muted = false;
+    });
     state.safetySrc = url;
     state.safetyAudio = audio;
     setSafetyStatus('Attached: "' + (file.name || "audio") + '"');
@@ -433,6 +430,15 @@
     audio.preload = "auto";
     audio.onended = () => setBoardingStatus("Boarding music finished");
     audio.onerror = () => setBoardingStatus("Failed to load boarding music");
+    audio.load();
+    audio.muted = true;
+    audio.play().then(() => {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+    }).catch(() => {
+      audio.muted = false;
+    });
     state.boardingSrc = url;
     state.boardingAudio = audio;
     setBoardingStatus('Attached: "' + (file.name || "audio") + '"');
@@ -626,6 +632,14 @@
       if (saved) {
         const match = Array.from(select.options).find((o) => o.value === saved);
         if (match) select.value = saved;
+      } else if (voices.length) {
+        const g = voices.find(v => /Google/i.test(v.name));
+        if (g) {
+          state.voiceName = g.name;
+          localStorage.setItem("cabinPaVoice", state.voiceName);
+          const opt = Array.from(select.options).find(o => o.value === g.name);
+          if (opt) select.value = g.name;
+        }
       }
       if (saved2) {
         const match2 = Array.from(select2.options).find((o) => o.value === saved2);
@@ -654,21 +668,35 @@
       buildLanguageList();
     };
     fill();
-    window.speechSynthesis.onvoiceschanged = fill;
+    // assign callback for onvoiceschanged
+    if (typeof window.speechSynthesis !== 'undefined') {
+      window.speechSynthesis.onvoiceschanged = fill;
+    }
+    // polling fallback for environments where onvoiceschanged may not fire or is delayed
+    (function pollVoices(attemptsLeft = 12) {
+      const v = (window.speechSynthesis && window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || [];
+      if (v && v.length) return;
+      if (attemptsLeft <= 0) return;
+      setTimeout(() => {
+        fill();
+        pollVoices(attemptsLeft - 1);
+      }, 300);
+    })();
   }
 
   function resolveVoice() {
     const voices = window.speechSynthesis.getVoices() || [];
-    // if primaryLang set, prefer voice for that language
-    if (state.primaryLang) {
-      const byLang = resolveVoiceForLang(state.primaryLang);
-      if (byLang) return byLang;
-    }
     const name = state.voiceName || localStorage.getItem("cabinPaVoice");
     if (name) {
       const v = voices.find((x) => x.name === name);
       if (v) return v;
     }
+    if (state.primaryLang) {
+      const byLang = resolveVoiceForLang(state.primaryLang);
+      if (byLang) return byLang;
+    }
+    const googleVoice = voices.find((x) => /Google/i.test(x.name));
+    if (googleVoice) return googleVoice;
     const en = voices.find((x) => String(x.lang || "").toLowerCase().startsWith("en"));
     return en || voices[0] || null;
   }
