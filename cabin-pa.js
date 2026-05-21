@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cabin PA addon for GeoFS
 // @namespace    https://geofs-cabin-pa.local
-// @version      1.8.0
+// @version      1.8.5
 // @description  Cabin announcements panel with speech synthesis, seatbelt chime, safety audio with delay, control lock, and boarding music
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -29,7 +29,7 @@
   };
 
   const messages = {
-    boarding: "Welcome aboard your {airline} flight {flight} bound for {dest}. We are glad to have you onboard with us. As we prepare for departure, please stow carry-on items, fasten your seat belts, and ensure electronic devices are in flight safe mode. If this is not your flight, please do not hesitate to ask a crew member for assistance. We wish you a pleasant flight.",
+    boarding: "Welcome aboard your {airline} flight {flight} bound for {dest}. We are glad to have you onboard with us. As we prepare for departure, please stow carry-on items, fasten your seat belts, and ensure electronic devices are in flight safe mode. Cabin crew will be coming through the aisle to assist you.",
     boardingDoorOpen: "The boarding door has been opened; passengers may now disembark.",
     safety: "Please direct your attention to the cabin crew for the safety demonstration. Fasten your seat belt low and tight. In case of a loss of cabin pressure, oxygen masks will drop from the overhead panel. Place the mask over your nose and mouth and secure it before assisting others.",
     takeoff: "Cabin crew, takeoff stations. We are about to take off. Please make sure your seat backs and tray tables are in the upright position and window shades are raised.",
@@ -464,22 +464,63 @@
       .replace(/\{dest\}/g, d);
   }
 
+  function isEnglishLang(lang) {
+    return !lang || /^en\b/i.test(String(lang));
+  }
+
+  function getTargetLangForVoice(voice) {
+    if (voice && voice.lang) return String(voice.lang);
+    if (state.primaryLang) return String(state.primaryLang);
+    return null;
+  }
+
+  async function translateText(text, targetLang) {
+    if (!text || !targetLang || isEnglishLang(targetLang)) return text;
+    try {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
+      const resp = await fetch(url, { method: 'GET', mode: 'cors' });
+      if (!resp.ok) throw new Error('translate failed');
+      const data = await resp.json();
+      if (Array.isArray(data) && Array.isArray(data[0])) {
+        return data[0].map((part) => part[0]).join('');
+      }
+    } catch (e) {
+      console.warn('Translation failed, speaking original text', e);
+    }
+    return text;
+  }
+
+  function speakUtterance(text, voice, onend) {
+    const u = new SpeechSynthesisUtterance(text);
+    if (voice) u.voice = voice;
+    u.rate = 1;
+    u.pitch = 1;
+    u.volume = 1;
+    if (onend) u.onend = onend;
+    if (onend) u.onerror = onend;
+    window.speechSynthesis.speak(u);
+  }
+
   // Speak (fire-and-forget) — supports dual-language if enabled
   function speak(text) {
     if (!("speechSynthesis" in window)) return;
     text = populatePlaceholders(text);
     if (state.dualEnabled) {
-      speakDual(text);
+      speakDualAsync(text).catch(() => {});
       return;
     }
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    const v = resolveVoice();
-    if (v) u.voice = v;
-    u.rate = 1;
-    u.pitch = 1;
-    u.volume = 1;
-    window.speechSynthesis.speak(u);
+    const voice = resolveVoice();
+    const targetLang = getTargetLangForVoice(voice);
+    if (voice && !isEnglishLang(targetLang)) {
+      translateText(text, targetLang).then((translated) => {
+        speakUtterance(translated, voice);
+      }).catch(() => {
+        speakUtterance(text, voice);
+      });
+      return;
+    }
+    speakUtterance(text, voice);
   }
 
   // speakAsync returns a Promise that resolves after speech (or dual speech) finishes
@@ -492,9 +533,32 @@
         return;
       }
       try { window.speechSynthesis.cancel(); } catch (_) {}
+      const voice = resolveVoice();
+      const targetLang = getTargetLangForVoice(voice);
+      if (voice && !isEnglishLang(targetLang)) {
+        translateText(text, targetLang).then((translated) => {
+          const u = new SpeechSynthesisUtterance(translated);
+          if (voice) u.voice = voice;
+          u.rate = 1;
+          u.pitch = 1;
+          u.volume = 1;
+          u.onend = () => resolve();
+          u.onerror = () => resolve();
+          window.speechSynthesis.speak(u);
+        }).catch(() => {
+          const u = new SpeechSynthesisUtterance(text);
+          if (voice) u.voice = voice;
+          u.rate = 1;
+          u.pitch = 1;
+          u.volume = 1;
+          u.onend = () => resolve();
+          u.onerror = () => resolve();
+          window.speechSynthesis.speak(u);
+        });
+        return;
+      }
       const u = new SpeechSynthesisUtterance(text);
-      const v = resolveVoice();
-      if (v) u.voice = v;
+      if (voice) u.voice = voice;
       u.rate = 1;
       u.pitch = 1;
       u.volume = 1;
@@ -565,12 +629,28 @@
         });
       };
 
-      if (first && second) {
-        speakUtter(first, text).then(() => speakUtter(second, text)).then(() => resolve());
-      } else {
-        const v = first || second;
-        speakUtter(v, text).then(() => resolve());
-      }
+      const firstLang = getTargetLangForVoice(first);
+      const secondLang = getTargetLangForVoice(second);
+
+      Promise.all([
+        translateText(text, firstLang),
+        translateText(text, secondLang)
+      ]).then(([firstText, secondText]) => {
+        if (first && second) {
+          speakUtter(first, firstText).then(() => speakUtter(second, secondText)).then(() => resolve());
+        } else {
+          const v = first || second;
+          const t = first ? firstText : secondText;
+          speakUtter(v, t).then(() => resolve());
+        }
+      }).catch(() => {
+        if (first && second) {
+          speakUtter(first, text).then(() => speakUtter(second, text)).then(() => resolve());
+        } else {
+          const v = first || second;
+          speakUtter(v, text).then(() => resolve());
+        }
+      });
     });
   }
 
