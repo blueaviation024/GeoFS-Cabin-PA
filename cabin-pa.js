@@ -29,7 +29,7 @@
   };
 
   const messages = {
-    boarding: "Welcome aboard your {airline} flight {flight} bound for {dest}. We are glad to have you onboard with us. As we prepare for departure, please stow carry-on items, fasten your seat belts, and ensure electronic devices are in flight safe mode. Cabin crew will be coming through the aisle to assist you.",
+    boarding: "Welcome aboard your {airline} flight {flight} bound for {dest}. We are glad to have you onboard with us. As we prepare for departure, please stow carry-on items, fasten your seat belts, and ensure electronic devices are in flight safe mode. If this is not your flight, please don't hesitate to ask a crew member for help.",
     boardingDoorOpen: "The boarding door has been opened; passengers may now disembark.",
     safety: "Please direct your attention to the cabin crew for the safety demonstration. Fasten your seat belt low and tight. In case of a loss of cabin pressure, oxygen masks will drop from the overhead panel. Place the mask over your nose and mouth and secure it before assisting others.",
     takeoff: "Cabin crew, takeoff stations. We are about to take off. Please make sure your seat backs and tray tables are in the upright position and window shades are raised.",
