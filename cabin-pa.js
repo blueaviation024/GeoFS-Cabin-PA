@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cabin PA addon for GeoFS
 // @namespace    https://geofs-cabin-pa.local
-// @version      1.8.5
+// @version      2.0.0
 // @description  Cabin announcements panel with speech synthesis, seatbelt chime, safety audio with delay, control lock, and boarding music
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -14,6 +14,8 @@
     seatbelt: false,
     voiceName: null,
     voiceName2: null,
+    voiceLang: null, // language code for first voice (for translation)
+    voiceLang2: null, // language code for second voice (for translation)
     dualEnabled: false,
     dualOrderPrimaryFirst: true,
     useBestVoiceAuto: false,
@@ -25,12 +27,13 @@
     airlineName: null,
     flightNumber: null,
     destination: null,
-    primaryLang: null // new: selected primary language code (e.g. "en", "es")
+    primaryLang: null, // new: selected primary language code (e.g. "en", "es")
+    scriptVersion: "2.0.0"
   };
 
   const messages = {
     boarding: "Welcome aboard your {airline} flight {flight} bound for {dest}. We are glad to have you onboard with us. As we prepare for departure, please stow carry-on items, fasten your seat belts, and ensure electronic devices are in flight safe mode. If this is not your flight, please don't hesitate to ask a crew member for help.",
-    boardingDoorOpen: "The boarding door has been opened; passengers may now disembark.",
+    boardingDoorOpen: "The boarding door has been opened; passengers may now disembark. Thank you for flying {airline}. Once again, welcome to {dest}",
     safety: "Please direct your attention to the cabin crew for the safety demonstration. Fasten your seat belt low and tight. In case of a loss of cabin pressure, oxygen masks will drop from the overhead panel. Place the mask over your nose and mouth and secure it before assisting others.",
     takeoff: "Cabin crew, takeoff stations. We are about to take off. Please make sure your seat backs and tray tables are in the upright position and window shades are raised.",
     cruise: "We have reached our cruising altitude. The seat belt sign may be switched off, however we recommend keeping your seat belt fastened while seated. Cabin crew will be serving meals in a few moments.",
@@ -55,33 +58,41 @@
     document.addEventListener("keydown", handleKeydown, true);
     document.addEventListener("keyup", handleKeyup, true);
     document.addEventListener("keypress", handleKeypress, true);
+    
+    // Check for updates on startup
+    checkForUpdates();
+    // Check for updates every 1 minute
+    setInterval(checkForUpdates, 60 * 1000);
   }
 
   function injectStyles() {
     const s = document.createElement("style");
     s.textContent =
-      "#cabin-pa-panel{position:fixed;top:16px;right:16px;width:420px;background:rgba(22,23,26,.92);color:#fff;border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(6px);z-index:999999;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}" +
-      "#cabin-pa-panel .title{font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}" +
-      "#cabin-pa-panel .row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}" +
-      "#cabin-pa-panel button{flex:1;padding:8px 10px;border:none;border-radius:8px;background:#2b2f36;color:#fff;cursor:pointer;font-weight:500}" +
-      "#cabin-pa-panel button:hover{background:#3a3f47}" +
-      "#cabin-pa-panel .accent{background:#3d6cff}" +
-      "#cabin-pa-panel input, #cabin-pa-panel select{flex:1;padding:8px 10px;border-radius:8px;border:1px solid #454a52;background:#1f2228;color:#fff}" +
+      "#cabin-pa-panel{position:fixed;top:16px;right:16px;width:360px;background:rgba(255,255,255,.98);color:#1a1a1a;border-radius:10px;padding:10px;box-shadow:0 8px 32px rgba(0,0,0,.12);backdrop-filter:blur(6px);z-index:999999;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;border:1px solid rgba(0,0,0,.08);font-size:13px}" +
+      "#cabin-pa-panel .title{font-weight:700;margin-bottom:7px;display:flex;justify-content:space-between;align-items:center;color:#0d47a1;font-size:14px}" +
+      "#cabin-pa-panel .row{display:flex;gap:6px;flex-wrap:wrap;margin:5px 0}" +
+      "#cabin-pa-panel button{flex:1;padding:7px 10px;border:none;border-radius:7px;background:#f0f0f0;color:#1a1a1a;cursor:pointer;font-weight:600;transition:all .2s;border:1px solid #e0e0e0;font-size:12px}" +
+      "#cabin-pa-panel button:hover{background:#e8e8e8;border-color:#d0d0d0}" +
+      "#cabin-pa-panel .accent{background:#00a8ff;color:#fff;border-color:#00a8ff}" +
+      "#cabin-pa-panel .accent:hover{background:#0091d9;border-color:#0091d9}" +
+      "#cabin-pa-panel input, #cabin-pa-panel select{flex:1;padding:7px 10px;border-radius:7px;border:1px solid #d0d0d0;background:#fafafa;color:#1a1a1a;font-size:12px;transition:border .2s}" +
+      "#cabin-pa-panel input:focus, #cabin-pa-panel select:focus{outline:none;border-color:#00a8ff;box-shadow:0 0 0 3px rgba(0,168,255,.1)}" +
       "#cabin-pa-panel input[type=file]{flex:2}" +
-      "#cabin-pa-panel .close{width:auto;background:#444}" +
-      "#cabin-pa-panel .small{font-size:12px;opacity:.85}" +
-      "#cabin-pa-toggle{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;padding:10px 16px;border-radius:999px;border:none;background:#3d6cff;color:#fff;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:1000000;cursor:pointer}" +
-      "#cabin-pa-toggle:hover{filter:brightness(1.08)}" +
+      "#cabin-pa-panel .close{width:auto;background:#ff6b6b;color:#fff;border-color:#ff6b6b}" +
+      "#cabin-pa-panel .close:hover{background:#ff5252;border-color:#ff5252}" +
+      "#cabin-pa-panel .small{font-size:11px;opacity:.7;color:#666}" +
+      "#cabin-pa-toggle{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;padding:9px 16px;border-radius:999px;border:none;background:#00a8ff;color:#fff;font-weight:700;box-shadow:0 8px 24px rgba(0,168,255,.3);z-index:1000000;cursor:pointer;transition:all .2s;font-size:13px}" +
+      "#cabin-pa-toggle:hover{background:#0091d9;box-shadow:0 10px 28px rgba(0,168,255,.4);transform:translateX(-50%) translateY(-2px)}" +
       "@media (max-height:700px){#cabin-pa-toggle{bottom:64px}}" +
       "@media (max-height:540px){#cabin-pa-toggle{bottom:48px}}" +
-      "#cabin-pa-overlay{position:fixed;inset:0;background:transparent;z-index:999998;display:none}" +
-      "#cabin-pa-panel .meta-label{font-size:12px;opacity:.85;width:100%}" +
+      "#cabin-pa-overlay{position:fixed;inset:0;background:rgba(0,0,0,.2);z-index:999998;display:none;backdrop-filter:blur(2px)}" +
+      "#cabin-pa-panel .meta-label{font-size:11px;opacity:.7;width:100%;color:#666}" +
       /* language picker modal */
-      "#cabin-pa-lang-picker{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:320px;max-height:60vh;overflow:auto;background:#121316;border-radius:10px;padding:10px;z-index:1000001;display:none;box-shadow:0 8px 24px rgba(0,0,0,.6)}" +
-      "#cabin-pa-lang-picker h3{margin:0 0 8px 0;font-size:14px}" +
+      "#cabin-pa-lang-picker{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:280px;max-height:60vh;overflow:auto;background:#fff;border-radius:10px;padding:11px;z-index:1000001;display:none;box-shadow:0 12px 40px rgba(0,0,0,.15);border:1px solid rgba(0,0,0,.08)}" +
+      "#cabin-pa-lang-picker h3{margin:0 0 9px 0;font-size:13px;font-weight:700;color:#0d47a1}" +
       "#cabin-pa-lang-picker ul{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:6px}" +
-      "#cabin-pa-lang-picker li{background:#1f2228;padding:8px;border-radius:6px;cursor:pointer;text-align:center}" +
-      "#cabin-pa-lang-picker li:hover{background:#2b2f36}";
+      "#cabin-pa-lang-picker li{background:#f5f5f5;padding:8px;border-radius:6px;cursor:pointer;text-align:center;font-weight:500;color:#1a1a1a;border:1px solid #e8e8e8;transition:all .2s;font-size:12px}" +
+      "#cabin-pa-lang-picker li:hover{background:#00a8ff;color:#fff;border-color:#00a8ff}";
     document.head.appendChild(s);
   }
 
@@ -164,7 +175,10 @@
       "</div>" +
       '<div class="row">' +
       '<input type="file" id="cabin-pa-safety-file" accept="audio/*">' +
-      btn("Play Safety Video", "playSafety", "accent") +
+      "</div>" +
+      '<div class="row">' +
+      btn("Safety Audio (Announcement)", "playSafety", "accent") +
+      btn("Safety Audio (Direct)", "playSafetyDirect", "accent") +
       "</div>" +
       '<div class="row small"><span id="cabin-pa-safety-status">No safety audio attached</span></div>' +
       '<div class="row">' +
@@ -206,8 +220,7 @@
     dualOrder.addEventListener("change", () => { state.dualOrderPrimaryFirst = dualOrder.checked; localStorage.setItem("cabinPaDualOrder", state.dualOrderPrimaryFirst ? "1" : "0"); });
     autoBest.addEventListener("change", () => { state.useBestVoiceAuto = autoBest.checked; localStorage.setItem("cabinPaAutoBest", state.useBestVoiceAuto ? "1" : "0"); });
 
-    v1.addEventListener("change", () => { state.voiceName = v1.value; localStorage.setItem("cabinPaVoice", state.voiceName); });
-    v2.addEventListener("change", () => { state.voiceName2 = v2.value; localStorage.setItem("cabinPaVoice2", state.voiceName2); });
+    // voice change listeners are added by initVoices()
 
     // language button behavior
     const langBtn = document.getElementById("cabin-pa-lang-btn");
@@ -270,6 +283,28 @@
           }
         }, 5000);
       });
+      return;
+    }
+
+    if (action === "playSafetyDirect") {
+      if (!state.safetyAudio) {
+        setSafetyStatus("Attach a safety audio file first");
+        return;
+      }
+      if (state.safetyTimer) {
+        clearTimeout(state.safetyTimer);
+        state.safetyTimer = null;
+      }
+      try {
+        state.safetyAudio.currentTime = 0;
+        state.safetyAudio.play().then(() => {
+          setSafetyStatus("Playing safety audio…");
+        }).catch(() => {
+          setSafetyStatus("Safety audio play failed");
+        });
+      } catch (_) {
+        setSafetyStatus("Safety audio play failed");
+      }
       return;
     }
 
@@ -468,7 +503,10 @@
     return !lang || /^en\b/i.test(String(lang));
   }
 
-  function getTargetLangForVoice(voice) {
+  function getTargetLangForVoice(voice, voiceLang) {
+    // If we have an explicit language for this voice, use it
+    if (voiceLang) return voiceLang;
+    // Otherwise try to extract from voice's lang property
     if (voice && voice.lang) return String(voice.lang);
     if (state.primaryLang) return String(state.primaryLang);
     return null;
@@ -511,7 +549,7 @@
     }
     window.speechSynthesis.cancel();
     const voice = resolveVoice();
-    const targetLang = getTargetLangForVoice(voice);
+    const targetLang = getTargetLangForVoice(voice, state.voiceLang);
     if (voice && !isEnglishLang(targetLang)) {
       translateText(text, targetLang).then((translated) => {
         speakUtterance(translated, voice);
@@ -534,7 +572,7 @@
       }
       try { window.speechSynthesis.cancel(); } catch (_) {}
       const voice = resolveVoice();
-      const targetLang = getTargetLangForVoice(voice);
+      const targetLang = getTargetLangForVoice(voice, state.voiceLang);
       if (voice && !isEnglishLang(targetLang)) {
         translateText(text, targetLang).then((translated) => {
           const u = new SpeechSynthesisUtterance(translated);
@@ -613,6 +651,8 @@
 
       const first = state.dualOrderPrimaryFirst ? primary : secondary;
       const second = state.dualOrderPrimaryFirst ? secondary : primary;
+      const firstLang = state.dualOrderPrimaryFirst ? state.voiceLang : state.voiceLang2;
+      const secondLang = state.dualOrderPrimaryFirst ? state.voiceLang2 : state.voiceLang;
 
       if (!first && !second) { resolve(); return; }
 
@@ -629,12 +669,12 @@
         });
       };
 
-      const firstLang = getTargetLangForVoice(first);
-      const secondLang = getTargetLangForVoice(second);
+      const firstTargetLang = getTargetLangForVoice(first, firstLang);
+      const secondTargetLang = getTargetLangForVoice(second, secondLang);
 
       Promise.all([
-        translateText(text, firstLang),
-        translateText(text, secondLang)
+        translateText(text, firstTargetLang),
+        translateText(text, secondTargetLang)
       ]).then(([firstText, secondText]) => {
         if (first && second) {
           speakUtter(first, firstText).then(() => speakUtter(second, secondText)).then(() => resolve());
@@ -699,32 +739,105 @@
       const voices = window.speechSynthesis.getVoices() || [];
       select.innerHTML = "";
       select2.innerHTML = "";
-      voices.forEach((v) => {
+      
+      // Comprehensive language list (one voice per language)
+      const allLanguages = [
+        { code: "ar", name: "Arabic" },
+        { code: "bg", name: "Bulgarian" },
+        { code: "ca", name: "Catalan" },
+        { code: "cs", name: "Czech" },
+        { code: "cy", name: "Welsh" },
+        { code: "da", name: "Danish" },
+        { code: "de", name: "German" },
+        { code: "el", name: "Greek" },
+        { code: "en", name: "English" },
+        { code: "es", name: "Spanish" },
+        { code: "et", name: "Estonian" },
+        { code: "fi", name: "Finnish" },
+        { code: "fil", name: "Filipino" },
+        { code: "fr", name: "French" },
+        { code: "he", name: "Hebrew" },
+        { code: "hi", name: "Hindi" },
+        { code: "hr", name: "Croatian" },
+        { code: "hu", name: "Hungarian" },
+        { code: "id", name: "Indonesian" },
+        { code: "it", name: "Italian" },
+        { code: "ja", name: "Japanese" },
+        { code: "ko", name: "Korean" },
+        { code: "lt", name: "Lithuanian" },
+        { code: "lv", name: "Latvian" },
+        { code: "nb", name: "Norwegian" },
+        { code: "nl", name: "Dutch" },
+        { code: "pl", name: "Polish" },
+        { code: "pt", name: "Portuguese" },
+        { code: "ro", name: "Romanian" },
+        { code: "ru", name: "Russian" },
+        { code: "sk", name: "Slovak" },
+        { code: "sl", name: "Slovenian" },
+        { code: "sv", name: "Swedish" },
+        { code: "th", name: "Thai" },
+        { code: "tr", name: "Turkish" },
+        { code: "uk", name: "Ukrainian" },
+        { code: "zh", name: "Chinese" }
+      ];
+      
+      // First pass: collect native voices for each language
+      const nativeVoicesByLang = {};
+      allLanguages.forEach((lang) => {
+        const voicesForLang = voices.filter(v => {
+          const vLang = String(v.lang || "").toLowerCase();
+          return vLang === lang.code || vLang.startsWith(lang.code + "-");
+        });
+        if (voicesForLang.length > 0) {
+          const local = voicesForLang.find(v => v.localService);
+          const chosen = local || voicesForLang[0];
+          nativeVoicesByLang[lang.code] = chosen;
+        }
+      });
+      
+      // Find best voice for a language - ONLY SHOW LANGUAGES WITH NATIVE VOICES
+      const getBestVoiceForLang = (langCode) => {
+        // If this language has a native voice, use it
+        if (nativeVoicesByLang[langCode]) {
+          return { voice: nativeVoicesByLang[langCode], needsTranslation: false, langCode: null };
+        }
+        
+        // NO FALLBACK - return null for languages without native voices
+        return { voice: null, needsTranslation: false, langCode: null };
+      };
+      
+      // Create one option per language - ONLY FOR LANGUAGES WITH NATIVE VOICES
+      allLanguages.forEach((lang) => {
+        const best = getBestVoiceForLang(lang.code);
+        if (!best.voice) return;
+        
         const opt = document.createElement("option");
-        opt.value = v.name;
-        opt.textContent = v.name + " (" + (v.lang || "unknown") + (v.localService ? " local" : "") + ")";
+        opt.value = best.voice.name;
+        
+        if (best.needsTranslation) {
+          // Store language code for translation
+          opt.dataset.translationLang = best.langCode;
+          opt.textContent = lang.name + " (" + best.voice.name + " - translated)";
+        } else {
+          opt.textContent = lang.name + " (" + best.voice.name + ")";
+        }
+        
         select.appendChild(opt);
         const opt2 = opt.cloneNode(true);
         select2.appendChild(opt2);
       });
+      
       const saved = state.voiceName || localStorage.getItem("cabinPaVoice");
       const saved2 = state.voiceName2 || localStorage.getItem("cabinPaVoice2");
       if (saved) {
         const match = Array.from(select.options).find((o) => o.value === saved);
         if (match) select.value = saved;
-      } else if (voices.length) {
-        const g = voices.find(v => /Google/i.test(v.name));
-        if (g) {
-          state.voiceName = g.name;
-          localStorage.setItem("cabinPaVoice", state.voiceName);
-          const opt = Array.from(select.options).find(o => o.value === g.name);
-          if (opt) select.value = g.name;
-        }
       }
       if (saved2) {
         const match2 = Array.from(select2.options).find((o) => o.value === saved2);
         if (match2) select2.value = saved2;
       }
+      
       const dual = document.getElementById("cabin-pa-dual");
       const dualOrder = document.getElementById("cabin-pa-dual-order");
       const autoBest = document.getElementById("cabin-pa-auto-best");
@@ -737,22 +850,23 @@
 
       select.addEventListener("change", () => {
         state.voiceName = select.value;
+        const selectedOpt = select.options[select.selectedIndex];
+        state.voiceLang = selectedOpt.dataset.translationLang || null;
         localStorage.setItem("cabinPaVoice", state.voiceName);
       });
       select2.addEventListener("change", () => {
         state.voiceName2 = select2.value;
+        const selectedOpt2 = select2.options[select2.selectedIndex];
+        state.voiceLang2 = selectedOpt2.dataset.translationLang || null;
         localStorage.setItem("cabinPaVoice2", state.voiceName2);
       });
 
-      // populate language picker list now that voices are available
       buildLanguageList();
     };
     fill();
-    // assign callback for onvoiceschanged
     if (typeof window.speechSynthesis !== 'undefined') {
       window.speechSynthesis.onvoiceschanged = fill;
     }
-    // polling fallback for environments where onvoiceschanged may not fire or is delayed
     (function pollVoices(attemptsLeft = 12) {
       const v = (window.speechSynthesis && window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || [];
       if (v && v.length) return;
@@ -837,29 +951,68 @@
   function buildLanguageList() {
     const listEl = document.getElementById("cabin-pa-lang-list");
     if (!listEl) return;
+    
+    // Predefined comprehensive language list
+    const allLanguages = [
+      { code: "ar", name: "Arabic" },
+      { code: "bg", name: "Bulgarian" },
+      { code: "ca", name: "Catalan" },
+      { code: "cs", name: "Czech" },
+      { code: "cy", name: "Welsh" },
+      { code: "da", name: "Danish" },
+      { code: "de", name: "German" },
+      { code: "el", name: "Greek" },
+      { code: "en", name: "English" },
+      { code: "es", name: "Spanish" },
+      { code: "et", name: "Estonian" },
+      { code: "fi", name: "Finnish" },
+      { code: "fil", name: "Filipino" },
+      { code: "fr", name: "French" },
+      { code: "he", name: "Hebrew" },
+      { code: "hi", name: "Hindi" },
+      { code: "hr", name: "Croatian" },
+      { code: "hu", name: "Hungarian" },
+      { code: "id", name: "Indonesian" },
+      { code: "it", name: "Italian" },
+      { code: "ja", name: "Japanese" },
+      { code: "ko", name: "Korean" },
+      { code: "lt", name: "Lithuanian" },
+      { code: "lv", name: "Latvian" },
+      { code: "nb", name: "Norwegian" },
+      { code: "nl", name: "Dutch" },
+      { code: "pl", name: "Polish" },
+      { code: "pt", name: "Portuguese" },
+      { code: "ro", name: "Romanian" },
+      { code: "ru", name: "Russian" },
+      { code: "sk", name: "Slovak" },
+      { code: "sl", name: "Slovenian" },
+      { code: "sv", name: "Swedish" },
+      { code: "th", name: "Thai" },
+      { code: "tr", name: "Turkish" },
+      { code: "uk", name: "Ukrainian" },
+      { code: "zh", name: "Chinese" }
+    ];
+    
     const voices = window.speechSynthesis.getVoices() || [];
-    // collect unique language codes and prefer shorter codes (e.g. "en")
-    const map = {};
+    const availableLangs = new Set();
     voices.forEach(v => {
-      const lc = String(v.lang || "unknown").split("-")[0].toLowerCase();
-      if (!map[lc]) map[lc] = { code: lc, sample: v.lang || "", voices: [v] };
-      else map[lc].voices.push(v);
+      const lc = String(v.lang || "").split("-")[0].toLowerCase();
+      availableLangs.add(lc);
     });
-    const items = Object.values(map).sort((a,b) => a.code.localeCompare(b.code));
+    
     listEl.innerHTML = "";
-    items.forEach(it => {
+    allLanguages.forEach(lang => {
       const li = document.createElement("li");
-      li.textContent = it.code + (it.sample && it.sample !== it.code ? " (" + it.sample + ")" : "");
-      li.title = "Voices: " + it.voices.map(v => v.name).join(", ");
+      const available = availableLangs.has(lang.code);
+      li.textContent = lang.name + (available ? " ✓" : "");
+      li.title = lang.code + (available ? " (Available)" : " (No voice available)");
+      li.style.opacity = available ? "1" : "0.5";
       li.addEventListener("click", () => {
-        setPrimaryLanguage(it.code);
+        setPrimaryLanguage(lang.code);
         hideLanguagePicker();
       });
       listEl.appendChild(li);
     });
-    if (!items.length) {
-      listEl.innerHTML = '<li style="grid-column:1/-1">No voices available</li>';
-    }
   }
 
   function setPrimaryLanguage(code) {
@@ -907,6 +1060,85 @@
       o.stop(t + 0.38);
       setTimeout(() => ctx.close(), 450);
     } catch (_) {}
+  }
+
+  // Update check functions
+  async function checkForUpdates() {
+    try {
+      const repoUrl = "https://api.github.com/repos/blueaviation024/GeoFS-Cabin-PA/commits?per_page=1";
+      const response = await fetch(repoUrl, { method: 'GET', mode: 'cors' });
+      if (!response.ok) return;
+      const commits = await response.json();
+      if (!Array.isArray(commits) || commits.length === 0) return;
+      
+      const latestCommit = commits[0].sha;
+      const storedCommit = localStorage.getItem("cabinPaLastCommit");
+      
+      if (storedCommit && storedCommit !== latestCommit) {
+        // Update available!
+        showUpdateNotification();
+      }
+      localStorage.setItem("cabinPaLastCommit", latestCommit);
+    } catch (e) {
+      console.warn("Failed to check for updates:", e);
+    }
+  }
+
+  function showUpdateNotification() {
+    // Create modal overlay for update
+    const updateModal = document.createElement("div");
+    updateModal.id = "cabin-pa-update-modal";
+    updateModal.style.cssText = 
+      "position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)";
+    
+    const modalContent = document.createElement("div");
+    modalContent.style.cssText =
+      "background:#fff;border-radius:10px;padding:20px;width:90%;max-width:400px;box-shadow:0 12px 40px rgba(0,0,0,.25);text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif";
+    
+    const title = document.createElement("h2");
+    title.textContent = "Update Available!";
+    title.style.cssText = "margin:0 0 10px 0;color:#0d47a1;font-size:18px";
+    
+    const message = document.createElement("p");
+    message.textContent = "A new version of Cabin PA is available. Click the button below to update.";
+    message.style.cssText = "margin:0 0 15px 0;color:#666;font-size:14px;line-height:1.5";
+    
+    const updateBtn = document.createElement("button");
+    updateBtn.textContent = "Update Script";
+    updateBtn.style.cssText = 
+      "background:#00a8ff;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;margin-right:8px;transition:all .2s";
+    updateBtn.onmouseover = () => updateBtn.style.background = "#0091d9";
+    updateBtn.onmouseout = () => updateBtn.style.background = "#00a8ff";
+    updateBtn.onclick = () => {
+      window.open("https://github.com/blueaviation024/GeoFS-Cabin-PA/blob/main/cabin-pa.js", "_blank");
+      dismissUpdateModal(updateModal);
+    };
+    
+    const dismissBtn = document.createElement("button");
+    dismissBtn.textContent = "Later";
+    dismissBtn.style.cssText =
+      "background:#f0f0f0;color:#1a1a1a;border:1px solid #d0d0d0;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;transition:all .2s";
+    dismissBtn.onmouseover = () => dismissBtn.style.background = "#e8e8e8";
+    dismissBtn.onmouseout = () => dismissBtn.style.background = "#f0f0f0";
+    dismissBtn.onclick = () => dismissUpdateModal(updateModal);
+    
+    const buttonContainer = document.createElement("div");
+    buttonContainer.style.cssText = "display:flex;gap:8px;justify-content:center";
+    buttonContainer.appendChild(updateBtn);
+    buttonContainer.appendChild(dismissBtn);
+    
+    modalContent.appendChild(title);
+    modalContent.appendChild(message);
+    modalContent.appendChild(buttonContainer);
+    updateModal.appendChild(modalContent);
+    
+    document.body.appendChild(updateModal);
+  }
+
+  function dismissUpdateModal(modal) {
+    if (modal && modal.parentNode) {
+      modal.parentNode.removeChild(modal);
+    }
   }
 
   if (document.readyState === "loading") {
