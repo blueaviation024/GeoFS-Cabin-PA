@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cabin PA addon for GeoFS
 // @namespace    https://geofs-cabin-pa.local
-// @version      2.1.0
+// @version      2.1.5
 // @description  Cabin announcements panel with speech synthesis, seatbelt chime, safety audio with delay, control lock, and boarding music
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -29,6 +29,20 @@
     destination: null,
     primaryLang: null, // new: selected primary language code (e.g. "en", "es")
     activeTab: "main"
+  };
+
+  const messages = {
+    boarding: "Welcome onboard your {airline} flight {flight} to {dest}. Please stow your carry-on items, fasten your seatbelt, and prepare for departure.",
+    boardingDoorOpen: "The boarding door is now open. Passengers may now disembark. Please follow the cabin crew instructions and exit the aircraft in an orderly manner. Thank yuo for flying {airline} and enjoy your stay in {dest}.",
+    safety: "Ladies and gentlemen, please pay attention to the safety demonstration. Secure all carry-on items and follow the cabin crew instructions.",
+    takeoff: "Cabin crew, takeoff stations. We are now about to take off. Please ensure your seatbacks and tray tables are in their full upright position, and your seatbelts are securely fastened.",
+    cruise: "Ladies and gentlemen, we have reached cruising altitude. You may now use approved electronic devices and refreshments will be served shortly. Please check the menu for available options.",
+    descent: "Ladies and gentlemen, we are beginning our descent into {dest}. Please return your seat backs and tray tables to their full upright position and fasten your seatbelts. Cabin crew will be coming through the cabin to collect any remaining service items. Thank you for flying {airline}.",
+    landing: "Cabin crew, prepare for arrival. We are now in our final descent. Please ensure your seatbacks and tray tables are in their full upright position, and your seatbelts are securely fastened. We will be landing shortly.",
+    taxiin: "Hello everyone, {airline} welcomes you to {dest}. Please remain seated with your seatbelt fastened until the aircraft has come to a complete stop and the seatbelt sign has been turned off. Please check your surroundings to ensure if you never leave any of your belongings. Be cautious when opening the overhead bins, as items may have shifted during the flight. On behalf of the captain, first officer, and the rest of the team, we thank you for choosing {airline}. We hope you had a pleasant journey and look forward to welcoming you on board again soon.",
+    seatbeltOn: "The captain has switched on the fasten seatbelt sign. Please return to your seat and fasten your seatbelt. Thank you for your cooperation.",
+    seatbeltOff: "The captain has switched off the fasten seatbelt sign. You may now move about the cabin, but please keep your seatbelt fastened while seated.",
+    safetyVideoIntro: "At {airline}, your safety is our top priority. Please pay attention to the following safety demonstration video. It contains important information about the aircraft and emergency procedures. We appreciate your attention to keep you safe and comfortable during your flight."
   };
 
   const languageGroups = [
@@ -670,11 +684,18 @@
     return null;
   }
 
+  function getSpeechVoices() {
+    return (window.speechSynthesis && typeof window.speechSynthesis.getVoices === 'function')
+      ? window.speechSynthesis.getVoices() || []
+      : [];
+  }
+
   async function translateText(text, targetLang) {
     if (!text || !targetLang || isEnglishLang(targetLang)) return text;
+    if (typeof fetch !== 'function') return text;
     try {
       const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
-      const resp = await fetch(url, { method: 'GET', mode: 'cors' });
+      const resp = await fetch(url);
       if (!resp.ok) throw new Error('translate failed');
       const data = await resp.json();
       if (Array.isArray(data) && Array.isArray(data[0])) {
@@ -707,9 +728,7 @@
     }
     window.speechSynthesis.cancel();
     const voice = resolveVoice();
-    if (!voice) return;
     const targetLang = getTargetLangForVoice(voice, state.voiceLang);
-    if (!voice) return;
     if (!isEnglishLang(targetLang)) {
       translateText(text, targetLang).then((translated) => {
         speakUtterance(translated, voice);
@@ -732,7 +751,6 @@
       }
       try { window.speechSynthesis.cancel(); } catch (_) {}
       const voice = resolveVoice();
-      if (!voice) { resolve(); return; }
       const targetLang = getTargetLangForVoice(voice, state.voiceLang);
       if (!isEnglishLang(targetLang)) {
         translateText(text, targetLang).then((translated) => {
@@ -781,7 +799,10 @@
     const first = state.dualOrderPrimaryFirst ? primary : secondary;
     const second = state.dualOrderPrimaryFirst ? secondary : primary;
 
-    if (!first && !second) return;
+    if (!first && !second) {
+      speakUtterance(text, null);
+      return;
+    }
 
     const speakUtter = (voice, txt, onend) => {
       const u = new SpeechSynthesisUtterance(txt);
@@ -815,7 +836,16 @@
       const firstLang = state.dualOrderPrimaryFirst ? state.voiceLang : state.voiceLang2;
       const secondLang = state.dualOrderPrimaryFirst ? state.voiceLang2 : state.voiceLang;
 
-      if (!first && !second) { resolve(); return; }
+      if (!first && !second) {
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = 1;
+        u.pitch = 1;
+        u.volume = 1;
+        u.onend = () => resolve();
+        u.onerror = () => resolve();
+        window.speechSynthesis.speak(u);
+        return;
+      }
 
       const speakUtter = (voice, txt) => {
         return new Promise((res) => {
@@ -857,7 +887,7 @@
 
   function resolveVoiceByName(name) {
     if (!name) return null;
-    const voices = window.speechSynthesis.getVoices() || [];
+    const voices = getSpeechVoices();
     return voices.find((x) => x.name === name) || null;
   }
 
@@ -881,7 +911,7 @@
 
   function resolveVoiceForLang(langCode) {
     if (!langCode) return null;
-    const voices = window.speechSynthesis.getVoices() || [];
+    const voices = getSpeechVoices();
     return choosePreferredVoiceForLanguage(langCode, voices);
   }
 
@@ -999,15 +1029,16 @@
   }
 
   function resolveVoice() {
-    const voices = window.speechSynthesis.getVoices() || [];
+    const voices = getSpeechVoices();
     const name = state.voiceName || localStorage.getItem("cabinPaVoice");
     if (name) {
       const v = voices.find((x) => x.name === name);
       if (v) return v;
-      return null;
+      // If the saved voice is no longer available, fall back instead of stopping speech entirely.
     }
     if (state.primaryLang) {
-      return resolveVoiceForLang(state.primaryLang);
+      const langVoice = resolveVoiceForLang(state.primaryLang);
+      if (langVoice) return langVoice;
     }
     const googleVoice = voices.find((x) => /Google/i.test(x.name));
     if (googleVoice) return googleVoice;
@@ -1226,7 +1257,67 @@
     }
   }
 
+  function normalizeAircraftCandidate(item) {
+    if (!item || typeof item !== "object") return null;
+    const name = item.name || item.title || item.model || item.aircraftName || "";
+    const id = item.id || item.icao || item.type || item.aircraftId || name;
+    if (!name) return null;
+    return { item, name: String(name), id: String(id || name) };
+  }
+
+  function findGeoFSAircraftArrays() {
+    const seenKeys = new Set();
+    const candidates = [];
+
+    function scanArray(arr) {
+      if (!Array.isArray(arr) || !arr.length) return;
+      const normalized = arr
+        .map(normalizeAircraftCandidate)
+        .filter(Boolean);
+      if (!normalized.length) return;
+      const key = normalized.map((x) => x.id).join("|");
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      candidates.push(arr);
+    }
+
+    const roots = [window.geofs, window.Geofs, window.geofsApp, window.geoFS, window];
+    roots.forEach((root) => {
+      if (!root || typeof root !== "object") return;
+      scanArray(root.aircrafts);
+      scanArray(root.aircraftList);
+      scanArray(root.aircraft);
+      scanArray(root.aircraftData);
+      scanArray(root.fleet);
+    });
+
+    for (const key in window) {
+      if (!Object.prototype.hasOwnProperty.call(window, key)) continue;
+      if (!/aircraft|plane|fleet|model/i.test(key)) continue;
+      scanArray(window[key]);
+    }
+
+    return candidates.length ? candidates : null;
+  }
+
   async function fetchGeoFSAircraftList() {
+    const localAircraftArrays = findGeoFSAircraftArrays();
+    if (localAircraftArrays && localAircraftArrays.length) {
+      const merged = [];
+      const seen = new Set();
+      localAircraftArrays.forEach((arr) => {
+        arr.forEach((item) => {
+          const normalized = normalizeAircraftCandidate(item);
+          if (!normalized) return;
+          if (seen.has(normalized.id)) return;
+          seen.add(normalized.id);
+          merged.push(item);
+        });
+      });
+      if (merged.length) return merged;
+    }
+
+    if (typeof fetch !== 'function') return null;
     const endpoints = ["/api/aircrafts", "/api/v1/aircrafts", "/api/v2/aircrafts"];
     for (const endpoint of endpoints) {
       try {
@@ -1291,9 +1382,10 @@
 
   // Update check functions
   async function checkForUpdates() {
+    if (typeof fetch !== 'function') return;
     try {
       const repoUrl = "https://api.github.com/repos/blueaviation024/GeoFS-Cabin-PA/commits?per_page=1";
-      const response = await fetch(repoUrl, { method: 'GET', mode: 'cors' });
+      const response = await fetch(repoUrl);
       if (!response.ok) return;
       const commits = await response.json();
       if (!Array.isArray(commits) || commits.length === 0) return;
