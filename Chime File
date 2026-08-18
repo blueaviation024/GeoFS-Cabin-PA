@@ -1,43 +1,4 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Seatbelt Chime - Example</title>
-</head>
-<body>
-  <h1>Seatbelt Chime</h1>
-  <p>Play the audio hosted on GitHub (raw URL).</p>
-
-  <audio id="chime" controls preload="auto" crossorigin="anonymous">
-    <source src="https://raw.githubusercontent.com/blueaviation024/GeoFS-Cabin-PA/main/seatbelt%20chime.mp3" type="audio/mpeg">
-    Your browser does not support the audio element.
-  </audio>
-
-  <div style="margin-top:12px;">
-    <button id="play">Play</button>
-    <button id="pause">Pause</button>
-    <button id="once">Play (new Audio)</button>
-  </div>
-
-  <script>
-    const audio = document.getElementById('chime');
-    document.getElementById('play').addEventListener('click', () => {
-      audio.play().catch(err => console.error('Play blocked:', err));
-    });
-    document.getElementById('pause').addEventListener('click', () => audio.pause());
-    document.getElementById('once').addEventListener('click', () => {
-      const a = new Audio('https://raw.githubusercontent.com/blueaviation024/GeoFS-Cabin-PA/main/seatbelt%20chime.mp3');
-      a.play().catch(err => console.error('Play blocked:', err));
-    });
-  </script>
-
-  <!--
-    Notes:
-    - To host this from your repo and serve via GitHub Pages, add this file and the MP3 to the repo.
-    - Avoid spaces in filenames; rename to `seatbelt-chime.mp3` for cleaner URLs.
-    - Enable GitHub Pages (Settings → Pages) and use the published site URL to load this page.
-    - raw.githubusercontent.com works for direct playback but may not allow CORS for WebAudio processing.
-  -->
-
-</body>
-</html>
+<audio id="chime" controls preload="auto">
+  <source src="https://raw.githubusercontent.com/blueaviation024/GeoFS-Cabin-PA/main/seatbelt-chime.mp3" type="audio/mpeg">
+  Your browser does not support the audio element.
+</audio>
