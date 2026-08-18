@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cabin PA addon for GeoFS
 // @namespace    https://geofs-cabin-pa.local
-// @version      2.1.5
+// @version      2.2.0
 // @description  Cabin announcements panel with speech synthesis, seatbelt chime, safety audio with delay, control lock, and boarding music
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -10,6 +10,16 @@
 // ==/UserScript==
 
 (function () {
+  const seatbeltChimePageUrl = "https://blueaviation024.github.io/GeoFS-Cabin-PA/chime.html";
+  const seatbeltChimeUrls = [
+    "https://raw.githubusercontent.com/blueaviation024/GeoFS-Cabin-PA/main/seatbelt-chime.mp3",
+    "https://raw.githubusercontent.com/blueaviation024/GeoFS-Cabin-PA/main/seatbelt%20chime.mp3"
+  ];
+  const seatbeltChimeState = {
+    audio: null,
+    activeUrl: null
+  };
+
   const state = {
     seatbelt: false,
     voiceName: null,
@@ -183,6 +193,7 @@
     loadVoicePreference();
     initVoices();
     loadFlightInfo();
+    attachSeatbeltChimeHooks();
 
     document.addEventListener("keydown", handleKeydown, true);
     document.addEventListener("keyup", handleKeyup, true);
@@ -192,6 +203,109 @@
     checkForUpdates();
     // Check for updates every 1 minute
     setInterval(checkForUpdates, 60 * 1000);
+  }
+
+  function attachSeatbeltChimeHooks() {
+    document.addEventListener("click", handleGeoFSeatbeltClick, true);
+
+    const observer = new MutationObserver(() => {
+      const geoState = getSeatbeltStateFromGeoFS();
+      if (geoState === null) return;
+      if (state.seatbelt !== geoState) {
+        state.seatbelt = geoState;
+        playSeatbeltChime();
+      }
+    });
+
+    const targetNode = document.body || document.documentElement;
+    if (targetNode) {
+      observer.observe(targetNode, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "aria-label", "title", "data-state", "data-seatbelt", "aria-pressed", "value"]
+      });
+    }
+  }
+
+  function handleGeoFSeatbeltClick(event) {
+    const target = event && event.target && event.target.closest ? event.target.closest("button, [role='button'], div, span, label, input") : null;
+    if (!target) return;
+
+    const text = [
+      target.textContent || "",
+      target.getAttribute("aria-label") || "",
+      target.getAttribute("title") || "",
+      target.id || "",
+      target.className || "",
+      target.getAttribute("data-state") || "",
+      target.getAttribute("data-seatbelt") || "",
+      target.getAttribute("aria-pressed") || "",
+      target.value || ""
+    ].join(" ").toLowerCase();
+
+    if (!/seatbelt|fasten.*belt|belt.*sign/.test(text)) return;
+
+    const inferredState = inferSeatbeltStateFromText(text);
+    if (inferredState === null) {
+      const geoState = getSeatbeltStateFromGeoFS();
+      if (geoState !== null && geoState !== state.seatbelt) {
+        state.seatbelt = geoState;
+        playSeatbeltChime();
+      }
+      return;
+    }
+
+    if (state.seatbelt !== inferredState) {
+      state.seatbelt = inferredState;
+      playSeatbeltChime();
+    }
+  }
+
+  function inferSeatbeltStateFromText(text) {
+    const onMatches = /(seatbelt.*(on|enabled|fasten|secure)|fasten.*seatbelt|belt.*on|switch.*on)/i.test(text);
+    const offMatches = /(seatbelt.*(off|disabled|unfasten|release)|fasten.*off|belt.*off|switch.*off)/i.test(text);
+    if (onMatches && !offMatches) return true;
+    if (offMatches && !onMatches) return false;
+    return null;
+  }
+
+  function getSeatbeltStateFromGeoFS() {
+    try {
+      const roots = [window.geofs, window.Geofs, window.geofsApp, window.geoFS, window];
+      for (const root of roots) {
+        if (!root || typeof root !== "object") continue;
+
+        const keys = [
+          "seatbelt", "seatBelt", "seatbeltState", "seatbeltSign",
+          "fastenSeatbelt", "fastenSeatbeltSign", "beltSign", "belt"
+        ];
+
+        for (const key of keys) {
+          const value = root[key];
+          if (typeof value === "boolean") return value;
+          if (typeof value === "string") {
+            const lower = value.toLowerCase();
+            if (/(on|enabled|fastened|secure)/.test(lower)) return true;
+            if (/(off|disabled|unfastened|release)/.test(lower)) return false;
+          }
+        }
+
+        const nested = root.flight || root.aircraft || root.state || root.gameState || root.ui;
+        if (nested && typeof nested === "object") {
+          for (const key of keys) {
+            const value = nested[key];
+            if (typeof value === "boolean") return value;
+            if (typeof value === "string") {
+              const lower = value.toLowerCase();
+              if (/(on|enabled|fastened|secure)/.test(lower)) return true;
+              if (/(off|disabled|unfastened|release)/.test(lower)) return false;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   function injectStyles() {
@@ -514,13 +628,13 @@
 
     if (action === "seatbeltOn") {
       state.seatbelt = true;
-      ding();
+      playSeatbeltChime();
       speak(messages.seatbeltOn);
       return;
     }
     if (action === "seatbeltOff") {
       state.seatbelt = false;
-      ding();
+      playSeatbeltChime();
       speak(messages.seatbeltOff);
       return;
     }
@@ -1358,6 +1472,39 @@
     container.innerHTML = "<div style='font-size:12px;color:#555;'>Seat map unavailable. Ensure GeoFS aircraft data is loaded and try again.</div>";
   }
   // -----------------------------------------------------------------------
+
+  function getSeatbeltChimeAudio() {
+    if (!seatbeltChimeState.audio) {
+      const audio = new Audio();
+      audio.preload = "auto";
+      audio.volume = 1;
+      audio.crossOrigin = "anonymous";
+      seatbeltChimeState.audio = audio;
+    }
+    return seatbeltChimeState.audio;
+  }
+
+  function playSeatbeltChime() {
+    try {
+      const audio = getSeatbeltChimeAudio();
+      let attempt = 0;
+      const playNext = () => {
+        const url = seatbeltChimeUrls[attempt];
+        if (!url) return;
+        if (audio.src !== url) {
+          audio.src = url;
+        }
+        audio.currentTime = 0;
+        audio.play().catch(() => {
+          attempt += 1;
+          if (seatbeltChimeUrls[attempt]) {
+            playNext();
+          }
+        });
+      };
+      playNext();
+    } catch (_) {}
+  }
 
   function ding() {
     try {
