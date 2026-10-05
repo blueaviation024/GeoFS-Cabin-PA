@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cabin PA addon for GeoFS
 // @namespace    https://geofs-cabin-pa.local
-// @version      2.2.0
+// @version      2.3.0
 // @description  Cabin announcements panel with speech synthesis, seatbelt chime, safety audio with delay, control lock, and boarding music
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
@@ -38,8 +38,26 @@
     flightNumber: null,
     destination: null,
     primaryLang: null, // new: selected primary language code (e.g. "en", "es")
-    activeTab: "main"
+    activeTab: "main",
+    panelVisible: false,
+    cabinLightsOn: true,
+    cabinMoodColor: "#ffbf69",
+    themeMode: "auto",
+    panelCompact: false,
+    defaultTab: "main",
+    autoHidePanel: true,
+    playSeatbeltChimeEnabled: true
   };
+  let startupIntroShown = false;
+  let startupIntroTimer = null;
+  let startupTipTimer = null;
+  const startupTips = [
+    "Set your airline, flight number, and destination to personalize announcements.",
+    "Choose a primary language to match announcements with an available voice.",
+    "Use the Cabin tab to adjust cabin lights and mood color without speaking an announcement.",
+    "Attach your own audio for the safety demonstration or boarding music.",
+    "Press Shift+P to open or close the Cabin PA panel."
+  ];
 
   const messages = {
     boarding: "Welcome onboard your {airline} flight {flight} to {dest}. Please stow your carry-on items, fasten your seatbelt, and prepare for departure.",
@@ -50,6 +68,9 @@
     descent: "Ladies and gentlemen, we are beginning our descent into {dest}. Please return your seat backs and tray tables to their full upright position and fasten your seatbelts. Cabin crew will be coming through the cabin to collect any remaining service items. Thank you for flying {airline}.",
     landing: "Cabin crew, prepare for arrival. We are now in our final descent. Please ensure your seatbacks and tray tables are in their full upright position, and your seatbelts are securely fastened. We will be landing shortly.",
     taxiin: "Hello everyone, {airline} welcomes you to {dest}. Please remain seated with your seatbelt fastened until the aircraft has come to a complete stop and the seatbelt sign has been turned off. Please check your surroundings to ensure if you never leave any of your belongings. Be cautious when opening the overhead bins, as items may have shifted during the flight. On behalf of the captain, first officer, and the rest of the team, we thank you for choosing {airline}. We hope you had a pleasant journey and look forward to welcoming you on board again soon.",
+    armDoors: "Cabin crew, arm doors. Please ensure all doors are armed and the cabin is secure for departure.",
+    disarmDoors: "Cabin crew, disarm doors. Please remain seated and await further instructions.",
+    crosscheck: "Cabin crew, crosscheck. Please confirm all passengers are seated, seatbelts are fastened, and the cabin is clear and secure.",
     seatbeltOn: "The captain has switched on the fasten seatbelt sign. Please return to your seat and fasten your seatbelt. Thank you for your cooperation.",
     seatbeltOff: "The captain has switched off the fasten seatbelt sign. You may now move about the cabin, but please keep your seatbelt fastened while seated.",
     safetyVideoIntro: "At {airline}, your safety is our top priority. Please pay attention to the following safety demonstration video. It contains important information about the aircraft and emergency procedures. We appreciate your attention to keep you safe and comfortable during your flight."
@@ -309,14 +330,72 @@
   }
 
   function injectStyles() {
+    const commonFont = "'Montserrat', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif";
+    const fontLink = document.createElement("link");
+    fontLink.rel = "stylesheet";
+    fontLink.href = "https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap";
+    document.head.appendChild(fontLink);
+
     const s = document.createElement("style");
     s.textContent =
-      "#cabin-pa-panel{position:fixed;top:16px;right:16px;width:360px;background:rgba(255,255,255,.98);color:#1a1a1a;border-radius:10px;padding:10px;box-shadow:0 8px 32px rgba(0,0,0,.12);backdrop-filter:blur(6px);z-index:999999;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;border:1px solid rgba(0,0,0,.08);font-size:13px}" +
-      "#cabin-pa-panel .title{font-weight:700;margin-bottom:7px;display:flex;justify-content:space-between;align-items:center;color:#0d47a1;font-size:14px}" +
-      "#cabin-pa-panel .tab-bar{display:flex;gap:6px;margin:8px 0 12px 0}" +
-      "#cabin-pa-panel .tab-bar button{flex:1;padding:8px 10px;border:none;border-radius:8px;background:#f0f0f0;color:#1a1a1a;cursor:pointer;font-weight:700;transition:all .2s;border:1px solid #e0e0e0;font-size:12px}" +
-      "#cabin-pa-panel .tab-bar button.active{background:#00a8ff;color:#fff;border-color:#00a8ff;}" +
+      "#cabin-pa-panel{position:fixed;top:16px;right:16px;width:340px;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;box-sizing:border-box;background:rgba(255,255,255,.98);color:#1a1a1a;border-radius:10px;padding:9px 10px;box-shadow:0 8px 32px rgba(0,0,0,.12);backdrop-filter:blur(6px);z-index:999999;font-family:" + commonFont + ";border:1px solid rgba(0,0,0,.08);font-size:12px;opacity:0;transform:translateY(-8px) scale(.98);animation:cabinPaPanelIn .22s ease forwards;--cabin-pa-accent:#00a8ff;--cabin-pa-accent-strong:#0091d9}" +
+      "@keyframes cabinPaPanelIn{0%{opacity:0;transform:translateY(-8px) scale(.98)}100%{opacity:1;transform:translateY(0) scale(1)}}" +
+      "@keyframes cabinPaTabIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}" +
+      "#cabin-pa-panel .tab-content.tab-entering{animation:cabinPaTabIn .18s ease-out both}" +
+      "@media (prefers-reduced-motion:reduce){#cabin-pa-panel .tab-content.tab-entering{animation:none}}" +
+      "@keyframes cabinPaSpinner{to{transform:rotate(360deg)}}" +
+      "@keyframes cabinPaProgress{from{width:8%}to{width:100%}}" +
+      "#cabin-pa-panel.startup-loading > :not(#cabin-pa-startup){visibility:hidden!important}" +
+      "#cabin-pa-startup{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:12px;overflow:auto;border-radius:inherit;box-sizing:border-box;background:rgba(248,251,255,.98);z-index:3;font-family:" + commonFont + ";color:#172033}" +
+      "#cabin-pa-panel[data-theme='dark'] #cabin-pa-startup{background:rgba(17,22,31,.98);color:#edf3ff}" +
+      "#cabin-pa-startup, #cabin-pa-startup *{font-family:" + commonFont + " !important;box-sizing:border-box}" +
+      "#cabin-pa-startup-card{width:min(320px,100%);padding:20px 16px;border-radius:14px;background:#fff;box-shadow:0 12px 36px rgba(0,0,0,.12);text-align:center;box-sizing:border-box}" +
+      "#cabin-pa-panel[data-theme='dark'] #cabin-pa-startup-card{background:#1a2130;color:#edf3ff}" +
+      "#cabin-pa-startup-mark{width:48px;height:48px;margin:0 auto 12px;border:3px solid #d9efff;border-top-color:#00a8ff;border-radius:50%;animation:cabinPaSpinner .9s linear infinite}" +
+      "#cabin-pa-startup-card h2{margin:0 0 6px;font-size:18px;color:#0d47a1}" +
+      "#cabin-pa-startup-status{margin:0;color:#627087;font-size:12px}" +
+      "#cabin-pa-startup-track{height:5px;margin:18px 0;border-radius:99px;background:#e8eef5;overflow:hidden}" +
+      "#cabin-pa-startup-progress{height:100%;width:8%;border-radius:inherit;background:linear-gradient(90deg,#00a8ff,#36c7d0);animation:cabinPaProgress 2.8s ease-out forwards}" +
+      "#cabin-pa-startup-tip{min-height:38px;margin:0;padding:12px;border-radius:10px;background:#f3f8fc;color:#46556c;font-size:12px;line-height:1.5}" +
+      "#cabin-pa-startup-card .tip-label{display:block;margin-bottom:4px;color:#0087cc;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}" +
+      "@media (prefers-reduced-motion:reduce){#cabin-pa-startup-mark,#cabin-pa-startup-progress{animation:none}#cabin-pa-startup-progress{width:100%}}" +
+      "#cabin-pa-panel .title{font-weight:700;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;color:#0d47a1;font-size:13px;font-family:" + commonFont + "}" +
+      "#cabin-pa-panel .cabin-pa-tab-bar, #cabin-pa-panel .tab-bar{display:flex;gap:5px;margin:6px 0 8px 0}" +
+      "#cabin-pa-panel .cabin-pa-tab-bar button, #cabin-pa-panel .tab-bar button{flex:1;padding:7px 8px;border:none;border-radius:8px;background:#f0f0f0;color:#1a1a1a;cursor:pointer;font-weight:700;transition:transform .15s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease;box-shadow:0 2px 0 rgba(0,0,0,.04);border:1px solid #e0e0e0;font-size:11px;font-family:" + commonFont + "}" +
+      "#cabin-pa-panel .cabin-pa-tab-bar button:hover, #cabin-pa-panel .tab-bar button:hover{transform:translateY(-1px);box-shadow:0 6px 14px rgba(0,0,0,.08)}" +
+      "#cabin-pa-panel .cabin-pa-btn-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex:0 0 16px;margin-right:7px;line-height:1;vertical-align:middle}" +
+      "#cabin-pa-panel .cabin-pa-btn-icon svg{display:block;width:100%;height:100%;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}" +
+      "#cabin-pa-panel .cabin-pa-btn-label{min-width:0;line-height:1.2}" +
+      "#cabin-pa-panel .announcement-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:5px 0}" +
+      "#cabin-pa-panel .announcement-grid button{display:flex;align-items:center;justify-content:flex-start;min-width:0;min-height:46px;width:100%;padding:7px 9px;text-align:left;flex:none}" +
+      "#cabin-pa-panel.compact .announcement-grid{gap:4px;margin:4px 0}" +
+      "#cabin-pa-panel.compact .announcement-grid button{min-height:42px;padding:6px 7px}" +
+      "#cabin-pa-panel.compact #cabin-pa-lang-selected{padding:5px 7px;font-size:10px}" +
+      "#cabin-pa-panel.compact{width:290px;max-width:calc(100vw - 32px)}" +
+      "#cabin-pa-panel.compact .row{margin:3px 0;gap:4px}" +
+      "#cabin-pa-panel.compact button, #cabin-pa-panel.compact input, #cabin-pa-panel.compact select{font-size:10px;padding:5px 7px}" +
+      "#cabin-pa-panel.compact .small{font-size:10px}" +
+      "#cabin-pa-panel .cabin-pa-tab-bar button:active, #cabin-pa-panel .tab-bar button:active{transform:translateY(0) scale(.98)}" +
+      "#cabin-pa-panel .cabin-pa-tab-bar button.active, #cabin-pa-panel .tab-bar button.active{background:#00a8ff;color:#fff;border-color:#00a8ff;}" +
       "#cabin-pa-panel .tab-content{display:none}" +
+      "#cabin-pa-panel[data-theme='dark']{background:rgba(17,22,31,.96);color:#edf3ff;border-color:rgba(255,255,255,.08);box-shadow:0 12px 34px rgba(0,0,0,.4)}" +
+      "#cabin-pa-panel[data-theme='dark'] .title{color:#dfeefd}" +
+      "#cabin-pa-panel[data-theme='dark'] .cabin-pa-tab-bar button, #cabin-pa-panel[data-theme='dark'] .tab-bar button{background:#1a2130;color:#edf3ff;border-color:#2d3848}" +
+      "#cabin-pa-panel[data-theme='dark'] .cabin-pa-tab-bar button:hover, #cabin-pa-panel[data-theme='dark'] .tab-bar button:hover{background:#243042}" +
+      "#cabin-pa-panel[data-theme='dark'] button{background:#202b3c;color:#edf3ff;border-color:#3a4961}" +
+      "#cabin-pa-panel[data-theme='dark'] button:hover{background:#2a3750}" +
+      "#cabin-pa-panel[data-theme='dark'] input, #cabin-pa-panel[data-theme='dark'] select{background:#101923;color:#edf3ff;border-color:#3b4d67}" +
+      "#cabin-pa-panel[data-theme='dark'] .small, #cabin-pa-panel[data-theme='dark'] .meta-label, #cabin-pa-panel[data-theme='dark'] .seatmap-status, #cabin-pa-panel[data-theme='dark'] .seatmap-note, #cabin-pa-panel[data-theme='dark'] .seatmap-row-label, #cabin-pa-panel[data-theme='dark'] .seatmap-legend, #cabin-pa-panel[data-theme='dark'] .seatmap-legend span, #cabin-pa-panel[data-theme='dark'] .discord-link{color:#dce8ff}" +
+      "#cabin-pa-panel[data-theme='dark'] .seatmap-grid{background:#121c2a;border-color:#2b394d}" +
+      "#cabin-pa-panel[data-theme='dark'] .seat-cell{background:#2a3b57;color:#edf3ff}" +
+      "#cabin-pa-panel[data-theme='dark'] .discord-link{color:#75c5ff}" +
+      "#cabin-pa-panel[data-theme='dark'] .discord-link:hover{color:#9ad9ff}" +
+      "#cabin-pa-panel[data-theme='dark'] .close{background:#ff6b6b;color:#fff;border-color:#ff6b6b}" +
+      "#cabin-pa-panel[data-theme='dark'] .close:hover{background:#ff5252;border-color:#ff5252}" +
+      "#cabin-pa-lang-picker[data-theme='dark']{background:#171d29;color:#edf3ff;border-color:#364760;box-shadow:0 12px 40px rgba(0,0,0,.35)}" +
+      "#cabin-pa-lang-picker[data-theme='dark'] li{background:#1f2b39;color:#edf3ff;border-color:#394d65}" +
+      "#cabin-pa-lang-picker[data-theme='dark'] li:hover{background:#00a8ff;color:#fff;border-color:#00a8ff}" +
+      "#cabin-pa-lang-picker[data-theme='dark'] li.group-heading{color:#dfeefd}" +
       "#cabin-pa-panel .tab-content.active{display:block}" +
       "#cabin-pa-panel .seatmap-status{margin-bottom:8px;font-size:12px;color:#333}" +
       "#cabin-pa-panel .seatmap-grid{display:flex;flex-direction:column;gap:4px;max-height:300px;overflow:auto;padding:6px;background:#f7fbff;border:1px solid #d7eaff;border-radius:10px;}" +
@@ -332,30 +411,36 @@
       "#cabin-pa-panel .seatmap-legend span{display:flex;align-items:center;gap:4px;}" +
       "#cabin-pa-panel .seatmap-legend .dot{width:10px;height:10px;border-radius:50%;display:inline-block;}" +
       "#cabin-pa-panel .seatmap-note{font-size:11px;color:#666;margin-top:8px;line-height:1.4;}" +
-      "#cabin-pa-panel .row{display:flex;gap:6px;flex-wrap:wrap;margin:5px 0}" +
-      "#cabin-pa-panel button{flex:1;padding:7px 10px;border:none;border-radius:7px;background:#f0f0f0;color:#1a1a1a;cursor:pointer;font-weight:600;transition:all .2s;border:1px solid #e0e0e0;font-size:12px}" +
-      "#cabin-pa-panel button:hover{background:#e8e8e8;border-color:#d0d0d0}" +
-      "#cabin-pa-panel .accent{background:#00a8ff;color:#fff;border-color:#00a8ff}" +
-      "#cabin-pa-panel .accent:hover{background:#0091d9;border-color:#0091d9}" +
+      "#cabin-pa-panel .row{display:flex;gap:5px;flex-wrap:wrap;margin:4px 0;align-items:center}" +
+      "#cabin-pa-panel .row > *{min-width:0;box-sizing:border-box}" +
+      "#cabin-pa-panel #cabin-pa-lang-btn, #cabin-pa-panel #cabin-pa-lang-selected{flex:1 1 auto;min-width:0}" +
+      "#cabin-pa-panel #cabin-pa-lang-selected{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%} " +
+      "#cabin-pa-panel button{flex:1;padding:6px 8px;border:none;border-radius:7px;background:#f0f0f0;color:#1a1a1a;cursor:pointer;font-weight:600;transition:transform .15s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease, filter .15s ease;box-shadow:0 2px 0 rgba(0,0,0,.04);border:1px solid #e0e0e0;font-size:11px;will-change:transform, box-shadow;font-family:" + commonFont + "}" +
+      "#cabin-pa-panel button:hover{background:#e8e8e8;border-color:#d0d0d0;transform:translateY(-1px);box-shadow:0 6px 16px rgba(0,0,0,.08)}" +
+      "#cabin-pa-panel button:active{transform:translateY(0) scale(.98);box-shadow:0 2px 8px rgba(0,0,0,.06)}" +
+      "#cabin-pa-panel .accent{background:var(--cabin-pa-accent);color:#fff;border-color:var(--cabin-pa-accent)}" +
+      "#cabin-pa-panel .accent:hover{background:var(--cabin-pa-accent-strong);border-color:var(--cabin-pa-accent-strong);filter:brightness(1.02)}" +
       "#cabin-pa-panel .discord-link{font-size:12px;color:#00a8ff;text-decoration:underline;cursor:pointer;display:inline-block;margin-bottom:6px;}" +
       "#cabin-pa-panel .discord-link:hover{color:#0077cc;}" +
-      "#cabin-pa-panel input, #cabin-pa-panel select{flex:1;padding:7px 10px;border-radius:7px;border:1px solid #d0d0d0;background:#fafafa;color:#1a1a1a;font-size:12px;transition:border .2s}" +
+      "#cabin-pa-panel input, #cabin-pa-panel select{flex:1;padding:6px 8px;border-radius:7px;border:1px solid #d0d0d0;background:#fafafa;color:#1a1a1a;font-size:11px;transition:border .2s;font-family:" + commonFont + "}" +
+      "#cabin-pa-panel .small, #cabin-pa-panel .meta-label, #cabin-pa-panel .seatmap-status, #cabin-pa-panel .seatmap-note, #cabin-pa-panel .seatmap-row-label, #cabin-pa-panel .seatmap-legend, #cabin-pa-panel .seatmap-legend span, #cabin-pa-panel .discord-link, #cabin-pa-lang-picker, #cabin-pa-lang-picker h3, #cabin-pa-lang-picker li{font-family:" + commonFont + "}" +
       "#cabin-pa-panel input:focus, #cabin-pa-panel select:focus{outline:none;border-color:#00a8ff;box-shadow:0 0 0 3px rgba(0,168,255,.1)}" +
       "#cabin-pa-panel input[type=file]{flex:2}" +
       "#cabin-pa-panel .close{width:auto;background:#ff6b6b;color:#fff;border-color:#ff6b6b}" +
       "#cabin-pa-panel .close:hover{background:#ff5252;border-color:#ff5252}" +
       "#cabin-pa-panel .small{font-size:11px;opacity:.7;color:#666}" +
-      "#cabin-pa-toggle{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;padding:9px 16px;border-radius:999px;border:none;background:#00a8ff;color:#fff;font-weight:700;box-shadow:0 8px 24px rgba(0,168,255,.3);z-index:1000000;cursor:pointer;transition:all .2s;font-size:13px}" +
+      "#cabin-pa-toggle{position:fixed;left:50%;transform:translateX(-50%);bottom:88px;padding:8px 14px;border-radius:999px;border:none;background:#00a8ff;color:#fff;font-weight:700;box-shadow:0 8px 24px rgba(0,168,255,.3);z-index:1000000;cursor:pointer;transition:all .2s;font-size:12px;font-family:" + commonFont + "}" +
       "#cabin-pa-toggle:hover{background:#0091d9;box-shadow:0 10px 28px rgba(0,168,255,.4);transform:translateX(-50%) translateY(-2px)}" +
       "@media (max-height:700px){#cabin-pa-toggle{bottom:64px}}" +
       "@media (max-height:540px){#cabin-pa-toggle{bottom:48px}}" +
-      "#cabin-pa-overlay{position:fixed;inset:0;background:rgba(0,0,0,.2);z-index:999998;display:none;backdrop-filter:blur(2px)}" +
+      "@keyframes cabinPaFadeIn{0%{opacity:0}100%{opacity:1}}" +
+      "#cabin-pa-overlay{position:fixed;inset:0;background:rgba(0,0,0,.2);z-index:999998;display:none;backdrop-filter:blur(2px);animation:cabinPaFadeIn .18s ease}" +
       "#cabin-pa-panel .meta-label{font-size:11px;opacity:.7;width:100%;color:#666}" +
       /* language picker modal */
-      "#cabin-pa-lang-picker{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:280px;max-height:60vh;overflow:auto;background:#fff;border-radius:10px;padding:11px;z-index:1000001;display:none;box-shadow:0 12px 40px rgba(0,0,0,.15);border:1px solid rgba(0,0,0,.08)}" +
+      "#cabin-pa-lang-picker{--lang-picker-width:280px;--lang-picker-item-padding:8px;--lang-picker-font-size:12px;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:var(--lang-picker-width);max-width:calc(100vw - 24px);max-height:60vh;overflow:auto;background:#fff;border-radius:10px;padding:11px;z-index:1000001;display:none;box-shadow:0 12px 40px rgba(0,0,0,.15);border:1px solid rgba(0,0,0,.08);box-sizing:border-box}" +
       "#cabin-pa-lang-picker h3{margin:0 0 9px 0;font-size:13px;font-weight:700;color:#0d47a1}" +
-      "#cabin-pa-lang-picker ul{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:1fr 1fr;gap:6px}" +
-      "#cabin-pa-lang-picker li{background:#f5f5f5;padding:8px;border-radius:6px;cursor:pointer;text-align:center;font-weight:500;color:#1a1a1a;border:1px solid #e8e8e8;transition:all .2s;font-size:12px}" +
+      "#cabin-pa-lang-picker ul{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}" +
+      "#cabin-pa-lang-picker li{background:#f5f5f5;padding:var(--lang-picker-item-padding);border-radius:6px;cursor:pointer;text-align:center;font-weight:500;color:#1a1a1a;border:1px solid #e8e8e8;transition:all .2s;font-size:var(--lang-picker-font-size);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
       "#cabin-pa-lang-picker li:hover{background:#00a8ff;color:#fff;border-color:#00a8ff}" +
       "#cabin-pa-lang-picker li.group-heading{grid-column:1/-1;background:transparent;border:none;color:#0d47a1;font-weight:700;cursor:default;padding:6px 0 2px 0;opacity:1}" +
       "#cabin-pa-lang-picker li.group-heading:hover{background:transparent;color:#0d47a1;border:none}";
@@ -365,7 +450,9 @@
   function createOverlay() {
     const overlay = document.createElement("div");
     overlay.id = "cabin-pa-overlay";
-    overlay.addEventListener("click", () => setPanelVisible(false));
+    overlay.addEventListener("click", () => {
+      if (state.autoHidePanel) setPanelVisible(false);
+    });
     document.body.appendChild(overlay);
   }
 
@@ -375,9 +462,11 @@
     toggle.id = "cabin-pa-toggle";
     toggle.type = "button";
     toggle.textContent = "Cabin PA";
-    toggle.addEventListener("click", () => {
-      const panel = document.getElementById("cabin-pa-panel");
-      setPanelVisible(!(panel && panel.style.display !== "none"));
+    toggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const nextVisible = !state.panelVisible;
+      setPanelVisible(nextVisible);
     });
     document.body.appendChild(toggle);
   }
@@ -386,16 +475,116 @@
     const panel = document.getElementById("cabin-pa-panel");
     const overlay = document.getElementById("cabin-pa-overlay");
     if (!panel || !overlay) return;
-    panel.style.display = visible ? "block" : "none";
-    overlay.style.display = visible ? "block" : "none";
+    state.panelVisible = !!visible;
     if (visible) {
+      if (!startupIntroShown) {
+        startupIntroShown = true;
+        panel.style.display = "block";
+        panel.style.visibility = "visible";
+        panel.style.opacity = "1";
+        panel.style.animation = "cabinPaPanelIn .22s ease";
+        panel.hidden = false;
+        panel.classList.add("startup-loading");
+        overlay.style.display = "none";
+        overlay.style.visibility = "hidden";
+        overlay.style.opacity = "0";
+        overlay.hidden = true;
+        showStartupIntro();
+        return;
+      }
+      panel.style.display = "block";
+      panel.style.visibility = "visible";
+      panel.style.opacity = "1";
+      panel.style.animation = "cabinPaPanelIn .22s ease";
+      panel.hidden = false;
+      overlay.style.display = "block";
+      overlay.style.visibility = "visible";
+      overlay.style.opacity = "1";
+      overlay.style.animation = "cabinPaFadeIn .18s ease";
+      overlay.hidden = false;
+      requestAnimationFrame(() => {
+        panel.style.display = "block";
+        panel.style.visibility = "visible";
+        panel.style.opacity = "1";
+        overlay.style.display = "block";
+        overlay.style.visibility = "visible";
+        overlay.style.opacity = "1";
+      });
       loadSeatMap();
+      return;
     }
+
+    clearTimeout(startupIntroTimer);
+    clearInterval(startupTipTimer);
+    startupIntroTimer = null;
+    startupTipTimer = null;
+    const startupScreen = document.getElementById("cabin-pa-startup");
+    if (startupScreen) startupScreen.remove();
+    panel.classList.remove("startup-loading");
+    panel.style.display = "none";
+    panel.style.visibility = "hidden";
+    panel.style.opacity = "0";
+    panel.style.animation = "none";
+    panel.hidden = true;
+    overlay.style.display = "none";
+    overlay.style.visibility = "hidden";
+    overlay.style.opacity = "0";
+    overlay.style.animation = "none";
+    overlay.hidden = true;
+  }
+
+  function showStartupIntro() {
+    const intro = document.createElement("div");
+    intro.id = "cabin-pa-startup";
+    intro.setAttribute("role", "status");
+    intro.setAttribute("aria-live", "polite");
+    intro.innerHTML =
+      '<div id="cabin-pa-startup-card">' +
+      '<div id="cabin-pa-startup-mark" aria-hidden="true"></div>' +
+      '<h2>Cabin PA</h2>' +
+      '<p id="cabin-pa-startup-status">Preparing your cabin controls…</p>' +
+      '<div id="cabin-pa-startup-track"><div id="cabin-pa-startup-progress"></div></div>' +
+      '<p id="cabin-pa-startup-tip"><span class="tip-label">Cabin tip</span><span id="cabin-pa-startup-tip-text"></span></p>' +
+      '</div>';
+    const panel = document.getElementById("cabin-pa-panel");
+    if (!panel) return;
+    panel.appendChild(intro);
+
+    let tipIndex = Math.floor(Math.random() * startupTips.length);
+    const tipText = document.getElementById("cabin-pa-startup-tip-text");
+    const updateTip = () => {
+      if (!tipText) return;
+      tipText.textContent = startupTips[tipIndex];
+      tipIndex = (tipIndex + 1) % startupTips.length;
+    };
+    updateTip();
+    startupTipTimer = setInterval(updateTip, 950);
+    startupIntroTimer = setTimeout(() => {
+      clearInterval(startupTipTimer);
+      startupTipTimer = null;
+      startupIntroTimer = null;
+      const screen = document.getElementById("cabin-pa-startup");
+      const panel = document.getElementById("cabin-pa-panel");
+      if (screen) screen.remove();
+      if (!state.panelVisible || !panel) return;
+      panel.classList.remove("startup-loading");
+      panel.style.display = "block";
+      panel.style.visibility = "visible";
+      panel.style.opacity = "1";
+      panel.style.animation = "cabinPaPanelIn .22s ease";
+      panel.hidden = false;
+      requestAnimationFrame(() => {
+        if (!state.panelVisible) return;
+        panel.style.display = "block";
+        panel.style.visibility = "visible";
+        panel.style.opacity = "1";
+      });
+      loadSeatMap();
+    }, 2800);
   }
 
   function isPanelVisible() {
-    const panel = document.getElementById("cabin-pa-panel");
-    return !!panel && panel.style.display !== "none";
+    return !!state.panelVisible;
   }
 
   function createPanel() {
@@ -406,8 +595,10 @@
       '<div class="title"><span>Cabin PA</span><button class="close" id="cabin-pa-close">Hide</button></div>' +
       '<div class="row small"><a class="discord-link" href="https://discord.gg/edYvUfb2jj" target="_blank" rel="noopener">Join the official addon server</a></div>' +
       '<div class="cabin-pa-tab-bar">' +
-      '<button type="button" data-tab="main" class="active">Controls</button>' +
-      '<button type="button" data-tab="seatmap">Seat Map</button>' +
+      '<button type="button" data-tab="main" class="active"><span class="cabin-pa-btn-icon">' + iconSvg("sliders") + '</span>Controls</button>' +
+      '<button type="button" data-tab="cabin"><span class="cabin-pa-btn-icon">' + iconSvg("lightbulb") + '</span>Cabin</button>' +
+      '<button type="button" data-tab="settings"><span class="cabin-pa-btn-icon">' + iconSvg("settings") + '</span>Settings</button>' +
+      '<button type="button" data-tab="seatmap"><span class="cabin-pa-btn-icon">' + iconSvg("seat") + '</span>Seat Map</button>' +
       '</div>' +
       '<div id="cabin-pa-tab-main" class="tab-content active">' +
       '<div class="row">' +
@@ -428,21 +619,20 @@
       "</div>" +
       '<div class="row small"><label><input type="checkbox" id="cabin-pa-dual"> Enable dual-language (speak both)</label><label style="margin-left:auto"><input type="checkbox" id="cabin-pa-dual-order"> Primary first</label></div>' +
       '<div class="row small"><label><input type="checkbox" id="cabin-pa-auto-best"> Auto-select best available voice</label></div>' +
-      '<div class="row">' +
-      btn("Boarding", "boarding") +
-      btn("Boarding Door Open", "boardingDoorOpen") +
-      btn("Safety", "safety") +
-      btn("Takeoff", "takeoff") +
-      "</div>" +
-      '<div class="row">' +
-      btn("Cruise", "cruise") +
-      btn("Descent", "descent") +
-      btn("Landing", "landing") +
-      "</div>" +
-      '<div class="row">' +
-      btn("Taxi‑in", "taxiin") +
-      btn("Seatbelt On", "seatbeltOn", "accent") +
-      btn("Seatbelt Off", "seatbeltOff") +
+      '<div class="announcement-grid">' +
+      btn("Boarding", "boarding", "announcement-btn", "ticket") +
+      btn("Boarding Door Open", "boardingDoorOpen", "announcement-btn", "door-open") +
+      btn("Safety", "safety", "announcement-btn", "life-ring") +
+      btn("Takeoff", "takeoff", "announcement-btn", "plane") +
+      btn("Cruise", "cruise", "announcement-btn", "cloud-sun") +
+      btn("Descent", "descent", "announcement-btn", "trend-down") +
+      btn("Landing", "landing", "announcement-btn", "plane-land") +
+      btn("Taxi‑in", "taxiin", "announcement-btn", "car") +
+      btn("Seatbelt On", "seatbeltOn", "accent announcement-btn", "lock") +
+      btn("Seatbelt Off", "seatbeltOff", "announcement-btn", "lock-open") +
+      btn("Arm Doors", "armDoors", "announcement-btn", "door-closed") +
+      btn("Disarm Doors", "disarmDoors", "announcement-btn", "door-open") +
+      btn("Crosscheck", "crosscheck", "announcement-btn", "check-circle") +
       "</div>" +
       '<div class="row">' +
       '<input type="text" id="cabin-pa-custom" placeholder="Custom announcement">' +
@@ -452,16 +642,60 @@
       '<input type="file" id="cabin-pa-safety-file" accept="audio/*">' +
       "</div>" +
       '<div class="row">' +
-      btn("Safety Audio (Announcement)", "playSafety", "accent") +
-      btn("Safety Audio (Direct)", "playSafetyDirect", "accent") +
+      btn("Safety Audio (Announcement)", "playSafety", "accent", "volume") +
+      btn("Safety Audio (Direct)", "playSafetyDirect", "accent", "megaphone") +
       "</div>" +
       '<div class="row small"><span id="cabin-pa-safety-status">No safety audio attached</span></div>' +
       '<div class="row">' +
       '<input type="file" id="cabin-pa-boarding-file" accept="audio/*">' +
-      btn("Start Boarding Music", "boardingStart", "accent") +
-      btn("Stop Boarding Music", "boardingStop") +
+      btn("Start Boarding Music", "boardingStart", "accent", "music") +
+      btn("Stop Boarding Music", "boardingStop", "", "stop") +
       "</div>" +
       '<div class="row small"><span id="cabin-pa-boarding-status">No boarding music attached</span><span style="margin-left:auto">Shortcut: Shift+P</span></div>' +
+      '</div>' +
+      '<div id="cabin-pa-tab-cabin" class="tab-content" style="display:none;">' +
+      '<div class="row">' +
+      btn("Cabin Lights On", "cabinLightsOn", "", "lightbulb") +
+      btn("Cabin Lights Off", "cabinLightsOff", "", "moon") +
+      btn("Reading Lights", "readingLightsOn", "", "lamp") +
+      "</div>" +
+      '<div class="row">' +
+      '<input type="color" id="cabin-pa-light-color" value="' + state.cabinMoodColor + '" title="Mood lighting color">' +
+      '<button id="cabin-pa-set-mood" data-action="setMoodLighting" class="accent"><span class="cabin-pa-btn-icon">' + iconSvg("palette") + '</span><span class="cabin-pa-btn-label">Apply Mood</span></button>' +
+      "</div>" +
+      '<div class="row">' +
+      '<button id="cabin-pa-lights-toggle" data-action="toggleCabinLightMode"><span class="cabin-pa-btn-icon">' + iconSvg("refresh") + '</span><span class="cabin-pa-btn-label">Cabin Mode</span></button>' +
+      '<button data-action="moodLighting"><span class="cabin-pa-btn-icon">' + iconSvg("palette") + '</span><span class="cabin-pa-btn-label">Mood Lighting</span></button>' +
+      "</div>" +
+      '</div>' +
+      '<div id="cabin-pa-tab-settings" class="tab-content" style="display:none;">' +
+      '<div class="row">' +
+      '<label for="cabin-pa-theme-mode" style="width:100%;font-size:11px;opacity:.8;"><span class="cabin-pa-btn-icon">' + iconSvg("palette") + '</span>Theme</label>' +
+      '<select id="cabin-pa-theme-mode">' +
+      '<option value="auto">Auto</option>' +
+      '<option value="light">Light</option>' +
+      '<option value="dark">Dark</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="row">' +
+      '<label for="cabin-pa-panel-size" style="width:100%;font-size:11px;opacity:.8;"><span class="cabin-pa-btn-icon">' + iconSvg("maximize") + '</span>Panel size</label>' +
+      '<select id="cabin-pa-panel-size">' +
+      '<option value="standard">Standard</option>' +
+      '<option value="compact">Compact</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="row">' +
+      '<label for="cabin-pa-default-tab" style="width:100%;font-size:11px;opacity:.8;"><span class="cabin-pa-btn-icon">' + iconSvg("panels") + '</span>Default tab</label>' +
+      '<select id="cabin-pa-default-tab">' +
+      '<option value="main">Controls</option>' +
+      '<option value="cabin">Cabin</option>' +
+      '<option value="settings">Settings</option>' +
+      '<option value="seatmap">Seat Map</option>' +
+      '</select>' +
+      '</div>' +
+      '<div class="row small"><label><input type="checkbox" id="cabin-pa-seatbelt-chime"><span class="cabin-pa-btn-icon">' + iconSvg("bell") + '</span>Play seatbelt chime sounds</label></div>' +
+      '<div class="row small"><label><input type="checkbox" id="cabin-pa-auto-hide"><span class="cabin-pa-btn-icon">' + iconSvg("click") + '</span>Auto-close on outside click</label></div>' +
+      '<div class="row small"><span class="meta-label">These settings are saved automatically.</span></div>' +
       '</div>' +
       '<div id="cabin-pa-tab-seatmap" class="tab-content" style="display:none;">' +
       '<div class="seatmap-status" id="cabin-pa-seatmap-status">Detecting aircraft...</div>' +
@@ -498,9 +732,53 @@
     const dual = document.getElementById("cabin-pa-dual");
     const dualOrder = document.getElementById("cabin-pa-dual-order");
     const autoBest = document.getElementById("cabin-pa-auto-best");
+    const themeModeSelect = document.getElementById("cabin-pa-theme-mode");
+    const panelSizeSelect = document.getElementById("cabin-pa-panel-size");
+    const defaultTabSelect = document.getElementById("cabin-pa-default-tab");
+    const seatbeltChimeCheckbox = document.getElementById("cabin-pa-seatbelt-chime");
+    const autoHideCheckbox = document.getElementById("cabin-pa-auto-hide");
     dual.addEventListener("change", () => { state.dualEnabled = dual.checked; localStorage.setItem("cabinPaDual", state.dualEnabled ? "1" : "0"); });
     dualOrder.addEventListener("change", () => { state.dualOrderPrimaryFirst = dualOrder.checked; localStorage.setItem("cabinPaDualOrder", state.dualOrderPrimaryFirst ? "1" : "0"); });
     autoBest.addEventListener("change", () => { state.useBestVoiceAuto = autoBest.checked; localStorage.setItem("cabinPaAutoBest", state.useBestVoiceAuto ? "1" : "0"); });
+    if (themeModeSelect) {
+      themeModeSelect.value = state.themeMode || "auto";
+      themeModeSelect.addEventListener("change", () => {
+        state.themeMode = themeModeSelect.value || "auto";
+        localStorage.setItem("cabinPaThemeMode", state.themeMode);
+        applyTheme();
+      });
+    }
+    if (panelSizeSelect) {
+      panelSizeSelect.value = state.panelCompact ? "compact" : "standard";
+      panelSizeSelect.addEventListener("change", () => {
+        state.panelCompact = panelSizeSelect.value === "compact";
+        localStorage.setItem("cabinPaPanelCompact", state.panelCompact ? "1" : "0");
+        applySettings();
+      });
+    }
+    if (defaultTabSelect) {
+      defaultTabSelect.value = state.defaultTab || "main";
+      defaultTabSelect.addEventListener("change", () => {
+        state.defaultTab = defaultTabSelect.value || "main";
+        localStorage.setItem("cabinPaDefaultTab", state.defaultTab);
+      });
+    }
+    if (seatbeltChimeCheckbox) {
+      seatbeltChimeCheckbox.checked = state.playSeatbeltChimeEnabled;
+      seatbeltChimeCheckbox.addEventListener("change", () => {
+        state.playSeatbeltChimeEnabled = seatbeltChimeCheckbox.checked;
+        localStorage.setItem("cabinPaSeatbeltChime", state.playSeatbeltChimeEnabled ? "1" : "0");
+      });
+    }
+    if (autoHideCheckbox) {
+      autoHideCheckbox.checked = state.autoHidePanel;
+      autoHideCheckbox.addEventListener("change", () => {
+        state.autoHidePanel = autoHideCheckbox.checked;
+        localStorage.setItem("cabinPaAutoHidePanel", state.autoHidePanel ? "1" : "0");
+      });
+    }
+    applyTheme();
+    applySettings();
 
     // voice change listeners are added by initVoices()
 
@@ -520,9 +798,68 @@
     updateLanguageDisplay();
   }
 
-  function btn(label, action, extra) {
+  function iconSvg(name) {
+    const paths = {
+      sliders: '<path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3"/><path d="M2 14h4m4-6h4m4 8h4"/>',
+      lightbulb: '<path d="M9 18h6m-5 4h4m-5-8a6 6 0 1 1 6 0c-.8.7-1 1.2-1 2h-4c0-.8-.2-1.3-1-2Z"/>',
+      settings: '<path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.7 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.7-1l-1.7.7-1.4-2.4L7.3 15a8 8 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.7-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.7 1l1.7-.7 1.4 2.4-1.4 1.1a8 8 0 0 1-.1 2Z"/>',
+      seat: '<path d="M6 4v6a3 3 0 0 0 3 3h7v7M8 13v7m8-7h2a2 2 0 0 1 2 2v4M6 20h14"/><path d="M10 7h7a2 2 0 0 1 2 2v4"/>',
+      ticket: '<path d="M3 7a2 2 0 0 0 0 4v2a2 2 0 0 0 0 4h18a2 2 0 0 0 0-4v-2a2 2 0 0 0 0-4H3Z"/><path d="M13 7v2m0 3v2m0 3v1"/>',
+      'door-open': '<path d="M4 21h16M7 21V5l11-2v18M7 5l11 3m-5 5h.01"/>',
+      'door-closed': '<path d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17M3 21h18m-8-9h.01"/>',
+      'life-ring': '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="m5.6 5.6 3.6 3.6m5.6 5.6 3.6 3.6m0-12.8-3.6 3.6m-5.6 5.6-3.6 3.6"/>',
+      plane: '<path d="m2 16 20-6-8-3-3-5-2 1 1 5-5 2-3-2-1 1 2 4-1 3Z"/>',
+      'cloud-sun': '<path d="M12 2v2m8 2-1.4 1.4M22 12h-2M4 12H2m3.4-6.6L4 4"/><path d="M8 18H6a4 4 0 1 1 1.2-7.8A6 6 0 0 1 19 12"/><path d="M13 21a4 4 0 1 1 0-8h4a4 4 0 1 1 0 8h-4Z"/>',
+      'trend-down': '<path d="M3 7 9 13l4-4 8 8"/><path d="M15 17h6v-6"/>',
+      'plane-land': '<path d="M2 19h20M4 15l7-2-2-8 2-1 5 7 5-1 1 2-6 3-3 3-3-2-5 1Z"/>',
+      car: '<path d="m5 11 1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11"/><path d="M3 11h18v7H3zm3 7v2m12-2v2M6 14h.01M18 14h.01"/>',
+      lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/>',
+      'lock-open': '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.8-1"/>',
+      'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/>',
+      volume: '<path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7m3-10a9 9 0 0 1 0 13"/>',
+      megaphone: '<path d="m3 11 18-5v12L3 13v-2Z"/><path d="M11 15.2 13 21H8l-2-8M21 10v4"/>',
+      music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+      stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+      moon: '<path d="M20.9 13A9 9 0 0 1 11 3.1 9 9 0 1 0 20.9 13Z"/>',
+      lamp: '<path d="m9 3 6 0 4 10H5L9 3Z"/><path d="M12 13v5m-4 3h8m-6-3h4"/>',
+      palette: '<path d="M12 3a9 9 0 0 0 0 18h1.2a2 2 0 0 0 1.4-3.4 1.8 1.8 0 0 1 1.3-3.1H18a3 3 0 0 0 3-3 9 9 0 0 0-9-8.5Z"/><path d="M7.5 10h.01M10 6.5h.01M15 7h.01M17 10.5h.01"/>',
+      refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-3"/>',
+      maximize: '<path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/>',
+      panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16m0-11h12"/>',
+      bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12h4"/>',
+      click: '<path d="m9 11 3 10 2-4 4 2 1-2-4-2 4-2-10-3Z"/><path d="M5 3 3 5m8-4v3m8-1-2 2M2 11h3"/>'
+    };
+    const body = paths[name];
+    return body ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true" focusable="false">' + body + '</svg>' : "";
+  }
+
+  function btn(label, action, extra, icon) {
     const cls = extra ? " " + extra : "";
-    return '<button data-action="' + action + '" class="' + cls + '">' + label + "</button>";
+    const iconHtml = icon ? '<span class="cabin-pa-btn-icon">' + iconSvg(icon) + '</span>' : "";
+    return '<button data-action="' + action + '" class="' + cls + '">' + iconHtml + '<span class="cabin-pa-btn-label">' + label + '</span></button>';
+  }
+
+  function setCabinMoodAccent(color) {
+    const resolved = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(color || "")) ? color : state.cabinMoodColor;
+    state.cabinMoodColor = resolved;
+    const panel = document.getElementById("cabin-pa-panel");
+    if (panel) {
+      panel.style.setProperty("--cabin-pa-accent", resolved);
+      panel.style.setProperty("--cabin-pa-accent-strong", shadeColor(resolved, -18));
+    }
+    const input = document.getElementById("cabin-pa-light-color");
+    if (input) input.value = resolved;
+  }
+
+  function shadeColor(hex, percent) {
+    const normalized = String(hex || "#00a8ff").replace("#", "");
+    const full = normalized.length === 3 ? normalized.split("").map((s) => s + s).join("") : normalized;
+    const num = parseInt(full, 16);
+    const amt = Math.round(2.55 * percent);
+    const r = (num >> 16) + amt;
+    const g = ((num >> 8) & 0x00FF) + amt;
+    const b = (num & 0x0000FF) + amt;
+    return "#" + (0x1000000 + (Math.min(255, Math.max(0, r)) << 16) + (Math.min(255, Math.max(0, g)) << 8) + Math.min(255, Math.max(0, b))).toString(16).slice(1);
   }
 
   function onPanelClick(e) {
@@ -638,6 +975,37 @@
       speak(messages.seatbeltOff);
       return;
     }
+    if (action === "cabinLightsOn") {
+      state.cabinLightsOn = true;
+      setCabinMoodAccent(state.cabinMoodColor);
+      return;
+    }
+    if (action === "cabinLightsOff") {
+      state.cabinLightsOn = false;
+      setCabinMoodAccent("#8aa4c3");
+      return;
+    }
+    if (action === "readingLightsOn") {
+      setCabinMoodAccent(state.cabinMoodColor);
+      return;
+    }
+    if (action === "moodLighting") {
+      setCabinMoodAccent(state.cabinMoodColor);
+      return;
+    }
+    if (action === "setMoodLighting") {
+      const colorInput = document.getElementById("cabin-pa-light-color");
+      if (colorInput) {
+        state.cabinMoodColor = colorInput.value || state.cabinMoodColor;
+      }
+      setCabinMoodAccent(state.cabinMoodColor);
+      return;
+    }
+    if (action === "toggleCabinLightMode") {
+      state.cabinLightsOn = !state.cabinLightsOn;
+      setCabinMoodAccent(state.cabinLightsOn ? state.cabinMoodColor : "#8aa4c3");
+      return;
+    }
 
     const text = messages[action];
     if (text) speak(text);
@@ -646,8 +1014,7 @@
   function handleKeydown(e) {
     const isToggle = e.shiftKey && String(e.key).toLowerCase() === "p";
     if (isToggle) {
-      const panel = document.getElementById("cabin-pa-panel");
-      setPanelVisible(!(panel && panel.style.display !== "none"));
+      setPanelVisible(!state.panelVisible);
       e.stopImmediatePropagation();
       e.stopPropagation();
       e.preventDefault();
@@ -1169,6 +1536,59 @@
     state.dualOrderPrimaryFirst = localStorage.getItem("cabinPaDualOrder") !== "0";
     state.useBestVoiceAuto = localStorage.getItem("cabinPaAutoBest") === "1";
     state.primaryLang = localStorage.getItem("cabinPaPrimaryLang") || null;
+    const savedTheme = localStorage.getItem("cabinPaThemeMode");
+    state.themeMode = savedTheme === "light" || savedTheme === "dark" || savedTheme === "auto" ? savedTheme : "auto";
+    state.panelCompact = localStorage.getItem("cabinPaPanelCompact") === "1";
+    const savedDefaultTab = localStorage.getItem("cabinPaDefaultTab");
+    state.defaultTab = savedDefaultTab === "main" || savedDefaultTab === "cabin" || savedDefaultTab === "settings" || savedDefaultTab === "seatmap" ? savedDefaultTab : "main";
+    state.autoHidePanel = localStorage.getItem("cabinPaAutoHidePanel") !== "0";
+    state.playSeatbeltChimeEnabled = localStorage.getItem("cabinPaSeatbeltChime") !== "0";
+  }
+
+  function applyTheme() {
+    const panel = document.getElementById("cabin-pa-panel");
+    const picker = document.getElementById("cabin-pa-lang-picker");
+    const themeSettings = document.getElementById("cabin-pa-theme-mode");
+    if (!panel) return;
+    const requested = state.themeMode || "auto";
+    const resolved = requested === "auto"
+      ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : requested;
+    panel.dataset.theme = resolved;
+    if (picker) picker.dataset.theme = resolved;
+    if (themeSettings) themeSettings.value = requested;
+    if (requested === "auto") {
+      const media = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+      if (media && typeof media.addEventListener === "function") {
+        media.addEventListener("change", applyTheme);
+      } else if (media && typeof media.addListener === "function") {
+        media.addListener(applyTheme);
+      }
+    }
+  }
+
+  function applySettings() {
+    const panel = document.getElementById("cabin-pa-panel");
+    const picker = document.getElementById("cabin-pa-lang-picker");
+    const languageSelected = document.getElementById("cabin-pa-lang-selected");
+    if (panel) {
+      panel.classList.toggle("compact", !!state.panelCompact);
+      panel.style.width = state.panelCompact ? "290px" : "340px";
+    }
+    if (picker) {
+      picker.style.setProperty("--lang-picker-width", state.panelCompact ? "230px" : "280px");
+      picker.style.setProperty("--lang-picker-item-padding", state.panelCompact ? "6px" : "8px");
+      picker.style.setProperty("--lang-picker-font-size", state.panelCompact ? "11px" : "12px");
+      picker.style.maxHeight = state.panelCompact ? "50vh" : "60vh";
+    }
+    if (languageSelected) {
+      languageSelected.style.padding = state.panelCompact ? "5px 7px" : "6px 8px";
+      languageSelected.style.fontSize = state.panelCompact ? "10px" : "12px";
+    }
+    const defaultTabSelect = document.getElementById("cabin-pa-default-tab");
+    if (defaultTabSelect) defaultTabSelect.value = state.defaultTab || "main";
+    const seatbeltChimeCheckbox = document.getElementById("cabin-pa-seatbelt-chime");
+    if (seatbeltChimeCheckbox) seatbeltChimeCheckbox.checked = state.playSeatbeltChimeEnabled;
   }
 
   function loadFlightInfo() {
@@ -1274,11 +1694,29 @@
 
   function switchTab(tab) {
     const mainTab = document.getElementById("cabin-pa-tab-main");
+    const cabinTab = document.getElementById("cabin-pa-tab-cabin");
+    const settingsTab = document.getElementById("cabin-pa-tab-settings");
     const seatTab = document.getElementById("cabin-pa-tab-seatmap");
     const buttons = Array.from(document.querySelectorAll("#cabin-pa-panel .cabin-pa-tab-bar button"));
     buttons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === tab));
-    if (mainTab) mainTab.style.display = tab === "main" ? "block" : "none";
-    if (seatTab) seatTab.style.display = tab === "seatmap" ? "block" : "none";
+    const tabPanels = {
+      main: mainTab,
+      cabin: cabinTab,
+      settings: settingsTab,
+      seatmap: seatTab
+    };
+    Object.values(tabPanels).forEach((panel) => {
+      if (!panel) return;
+      panel.classList.remove("tab-entering");
+      panel.style.display = "none";
+    });
+    const activePanel = tabPanels[tab];
+    if (activePanel) {
+      activePanel.style.display = "block";
+      void activePanel.offsetWidth;
+      activePanel.classList.add("tab-entering");
+      activePanel.addEventListener("animationend", () => activePanel.classList.remove("tab-entering"), { once: true });
+    }
     state.activeTab = tab;
     if (tab === "seatmap") loadSeatMap();
   }
